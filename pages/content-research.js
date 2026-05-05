@@ -1,10 +1,30 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import Link from 'next/link'
 import {
   Play, Plus, X, Star, ClipboardList, ExternalLink,
-  ChevronLeft, ChevronRight, Trash2, ArrowLeftRight
+  ChevronLeft, ChevronRight, Trash2
 } from 'lucide-react'
 import { useStore } from '../lib/store'
+
+// Proxy Instagram CDN images through our own API to bypass hotlink protection
+function proxy(url) {
+  if (!url) return ''
+  return `/api/img?url=${encodeURIComponent(url)}`
+}
+
+// Extract all media URLs from a post (single image, sidecar/carousel, or reel)
+function getMedia(item) {
+  // Sidecar/carousel: childPosts[].displayUrl
+  if (Array.isArray(item.childPosts) && item.childPosts.length > 0) {
+    return item.childPosts.map(c => c.displayUrl).filter(Boolean)
+  }
+  // Some Apify variants return images[] array
+  if (Array.isArray(item.images) && item.images.length > 0) {
+    return item.images.filter(Boolean)
+  }
+  // Single image / reel
+  return [item.displayUrl].filter(Boolean)
+}
 
 function engagementRatio(item) {
   const likes = item.likesCount || item.likes || 0
@@ -30,10 +50,27 @@ export default function ContentResearch() {
   const [results, setResults] = useState([])
   const [accountInput, setAccountInput] = useState('')
   const [modalItem, setModalItem] = useState(null)
+  const [modalIdx, setModalIdx] = useState(0)
 
   const r = data.research
   const activeKey = data.apifyKeys.find(k => k.id === data.activeApifyKeyId) || null
   const activeToken = activeKey?.token || ''
+
+  // Reset modal index when item changes
+  useEffect(() => { setModalIdx(0) }, [modalItem])
+
+  // Keyboard navigation in modal (left/right arrows, escape)
+  useEffect(() => {
+    if (!modalItem) return
+    const media = getMedia(modalItem)
+    const onKey = e => {
+      if (e.key === 'Escape') setModalItem(null)
+      else if (e.key === 'ArrowLeft' && media.length > 1) setModalIdx(i => (i - 1 + media.length) % media.length)
+      else if (e.key === 'ArrowRight' && media.length > 1) setModalIdx(i => (i + 1) % media.length)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [modalItem])
 
   async function runScrape() {
     if (!activeToken) return toast('Kein aktiver Apify-Key — in Settings einrichten', 'error')
@@ -96,6 +133,7 @@ export default function ContentResearch() {
       likes: item.likesCount || 0,
       views: item.videoViewCount || item.videoPlayCount || 0,
       account: item.ownerUsername || item.username || '?',
+      thumb: getMedia(item)[0] || '',
       addedAt: Date.now()
     }
     updateResearch({ kanban: { ...r.kanban, backlog: [card, ...r.kanban.backlog] } })
@@ -138,6 +176,11 @@ export default function ContentResearch() {
   }
 
   if (!loaded) return null
+
+  // Modal data
+  const modalMedia = modalItem ? getMedia(modalItem) : []
+  const modalCurrent = modalMedia[modalIdx] || ''
+  const isCarousel = modalMedia.length > 1
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -218,9 +261,21 @@ export default function ContentResearch() {
               const isFav = r.favorites.includes(id)
               const v = it.videoViewCount || it.videoPlayCount || 0
               const l = it.likesCount || 0
+              const media = getMedia(it)
+              const thumb = media[0]
+              const isMulti = media.length > 1
               return (
-                <div key={id || i} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }} onClick={() => setModalItem(it)}>
-                  {it.displayUrl && <img src={it.displayUrl} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover' }} loading="lazy" />}
+                <div key={id || i} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer', position: 'relative' }} onClick={() => setModalItem(it)}>
+                  {thumb && (
+                    <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: 'var(--bg3)' }}>
+                      <img src={proxy(thumb)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} loading="lazy" />
+                      {isMulti && (
+                        <div style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 10, padding: '2px 6px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          ⊞ {media.length}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ padding: 10 }}>
                     <div style={{ fontSize: 11, color: 'var(--text3)', display: 'flex', justifyContent: 'space-between' }}>
                       <span>@{it.ownerUsername || it.username}</span>
@@ -258,6 +313,7 @@ export default function ContentResearch() {
               <h3 style={{ fontSize: 13, marginBottom: 12, color: 'var(--text2)' }}>{label} <span style={{ color: 'var(--text3)' }}>({r.kanban[col].length})</span></h3>
               {r.kanban[col].map(c => (
                 <div key={c.id} className="kanban-card">
+                  {c.thumb && <img src={proxy(c.thumb)} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 6, marginBottom: 8 }} loading="lazy" />}
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>@{c.account}</div>
                   <div style={{ fontSize: 12 }}>{c.caption || '(keine Caption)'}</div>
                   <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>👁 {fmt(c.views)} ♥ {fmt(c.likes)}</div>
@@ -291,11 +347,51 @@ export default function ContentResearch() {
         </div>
       )}
 
-      {/* MODAL */}
+      {/* MODAL with carousel navigation */}
       {modalItem && (
         <div className="modal-back" onClick={() => setModalItem(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            {modalItem.displayUrl && <img src={modalItem.displayUrl} style={{ width: '100%', borderRadius: '14px 14px 0 0' }} alt="" />}
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700 }}>
+            {modalCurrent && (
+              <div style={{ position: 'relative', background: '#000', borderRadius: '14px 14px 0 0', overflow: 'hidden' }}>
+                <img src={proxy(modalCurrent)} style={{ width: '100%', display: 'block', maxHeight: '70vh', objectFit: 'contain' }} alt="" />
+                {isCarousel && (
+                  <>
+                    <button
+                      onClick={e => { e.stopPropagation(); setModalIdx(i => (i - 1 + modalMedia.length) % modalMedia.length) }}
+                      style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.6)', color: 'white', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                      aria-label="Vorheriges Bild"
+                    >
+                      <ChevronLeft size={22} />
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); setModalIdx(i => (i + 1) % modalMedia.length) }}
+                      style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'rgba(0,0,0,0.6)', color: 'white', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                      aria-label="Nächstes Bild"
+                    >
+                      <ChevronRight size={22} />
+                    </button>
+                    <div style={{ position: 'absolute', bottom: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 6 }}>
+                      {modalMedia.map((_, i) => (
+                        <button
+                          key={i}
+                          onClick={e => { e.stopPropagation(); setModalIdx(i) }}
+                          style={{
+                            width: i === modalIdx ? 22 : 8, height: 8, borderRadius: 4,
+                            background: i === modalIdx ? 'white' : 'rgba(255,255,255,0.5)',
+                            transition: 'all 0.2s',
+                            cursor: 'pointer'
+                          }}
+                          aria-label={`Bild ${i + 1}`}
+                        />
+                      ))}
+                    </div>
+                    <div style={{ position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 12, padding: '4px 10px', borderRadius: 12 }}>
+                      {modalIdx + 1} / {modalMedia.length}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <div style={{ padding: 16 }}>
               <div className="muted" style={{ fontSize: 13 }}>@{modalItem.ownerUsername || modalItem.username}</div>
               <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>
