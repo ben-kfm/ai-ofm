@@ -1,0 +1,319 @@
+import { useState, useMemo } from 'react'
+import Link from 'next/link'
+import {
+  Play, Plus, X, Star, ClipboardList, ExternalLink,
+  ChevronLeft, ChevronRight, Trash2, ArrowLeftRight
+} from 'lucide-react'
+import { useStore } from '../lib/store'
+
+function engagementRatio(item) {
+  const likes = item.likesCount || item.likes || 0
+  const comments = item.commentsCount || item.comments || 0
+  const views = item.videoViewCount || item.videoPlayCount || item.viewsCount || item.views || likes
+  if (!views) return 0
+  return ((likes + comments * 3) / views) * 100
+}
+function ratioClass(r) { if (r > 3) return 'eng-high'; if (r >= 1) return 'eng-mid'; return 'eng-low' }
+function fmt(n) { if (!n) return '0'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return String(n) }
+
+const TABS = [
+  { id: 'research', label: 'Research' },
+  { id: 'kanban', label: 'Kanban' },
+  { id: 'sessions', label: 'Sessions' }
+]
+
+export default function ContentResearch() {
+  const { data, updateResearch, update, toast, loaded } = useStore()
+  const [tab, setTab] = useState('research')
+  const [scraping, setScraping] = useState(false)
+  const [scrapeMsg, setScrapeMsg] = useState('')
+  const [results, setResults] = useState([])
+  const [accountInput, setAccountInput] = useState('')
+  const [modalItem, setModalItem] = useState(null)
+
+  const r = data.research
+  const activeKey = data.apifyKeys.find(k => k.id === data.activeApifyKeyId) || null
+  const activeToken = activeKey?.token || ''
+
+  async function runScrape() {
+    if (!activeToken) return toast('Kein aktiver Apify-Key — in Settings einrichten', 'error')
+    if (!r.accounts.length) return toast('Mindestens 1 Account hinzufügen', 'error')
+    setScraping(true); setScrapeMsg(`Starte Apify-Run mit "${activeKey.label}"...`); setResults([])
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: activeToken,
+          accounts: r.accounts,
+          type: r.scraperType,
+          daysBack: r.daysBack,
+          limit: r.limit
+        })
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Unbekannter Fehler')
+      setResults(json.items || [])
+      const sess = {
+        id: Date.now(),
+        at: new Date().toISOString(),
+        type: r.scraperType,
+        accounts: [...r.accounts],
+        count: json.total,
+        keyLabel: activeKey.label
+      }
+      updateResearch({ sessions: [sess, ...(r.sessions || [])].slice(0, 100) })
+      toast(`${json.total} Posts gescrapt ✓`, 'success')
+    } catch (e) {
+      toast('Fehler: ' + e.message, 'error')
+    } finally {
+      setScraping(false); setScrapeMsg('')
+    }
+  }
+
+  function addAccount() {
+    const a = accountInput.trim().replace('@', '')
+    if (!a) return
+    if (r.accounts.includes(a)) return toast('Account schon drin', 'error')
+    updateResearch({ accounts: [...r.accounts, a] })
+    setAccountInput('')
+  }
+  const removeAccount = a => updateResearch({ accounts: r.accounts.filter(x => x !== a) })
+
+  function toggleFav(item) {
+    const id = item.id || item.shortCode || item.url
+    const isFav = r.favorites.includes(id)
+    updateResearch({ favorites: isFav ? r.favorites.filter(x => x !== id) : [...r.favorites, id] })
+  }
+  function addToKanban(item) {
+    const id = item.id || item.shortCode || item.url
+    const all = [...r.kanban.backlog, ...r.kanban.inprogress, ...r.kanban.done]
+    if (all.find(x => x.id === id)) return toast('Schon im Kanban', 'error')
+    const card = {
+      id,
+      url: item.url || `https://instagram.com/p/${item.shortCode}`,
+      caption: (item.caption || '').slice(0, 140),
+      likes: item.likesCount || 0,
+      views: item.videoViewCount || item.videoPlayCount || 0,
+      account: item.ownerUsername || item.username || '?',
+      addedAt: Date.now()
+    }
+    updateResearch({ kanban: { ...r.kanban, backlog: [card, ...r.kanban.backlog] } })
+    toast('Zu Kanban hinzugefügt ✓', 'success')
+  }
+  function moveCard(id, fromCol, toCol) {
+    const card = r.kanban[fromCol].find(c => c.id === id); if (!card) return
+    updateResearch({
+      kanban: {
+        ...r.kanban,
+        [fromCol]: r.kanban[fromCol].filter(c => c.id !== id),
+        [toCol]: [card, ...r.kanban[toCol]]
+      }
+    })
+  }
+  const deleteCard = (id, col) => updateResearch({ kanban: { ...r.kanban, [col]: r.kanban[col].filter(c => c.id !== id) } })
+
+  const filtered = useMemo(() => {
+    return results
+      .map(i => ({ ...i, _ratio: engagementRatio(i) }))
+      .sort((a, b) => r.filter === 'viral'
+        ? (b.videoViewCount || b.likesCount || 0) - (a.videoViewCount || a.likesCount || 0)
+        : b._ratio - a._ratio
+      )
+  }, [results, r.filter])
+
+  function exportVA() {
+    const lines = [`# AI OFM Export — ${new Date().toLocaleString('de-DE')}`, '', `## ${r.filter === 'viral' ? 'Most Viral' : 'Highest Converting'}`, '']
+    filtered.forEach((it, i) => {
+      const url = it.url || `https://instagram.com/p/${it.shortCode}`
+      const account = it.ownerUsername || it.username || '?'
+      const v = it.videoViewCount || it.videoPlayCount || 0
+      const l = it.likesCount || 0
+      const date = it.timestamp ? new Date(it.timestamp).toLocaleDateString('de-DE') : '?'
+      lines.push(`${i + 1}. ${url}`)
+      lines.push(`   Account: @${account} | Views: ${fmt(v)} | Likes: ${fmt(l)} | Datum: ${date}`)
+      lines.push('')
+    })
+    navigator.clipboard.writeText(lines.join('\n')).then(() => toast('In Zwischenablage kopiert ✓', 'success'))
+  }
+
+  if (!loaded) return null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border-soft)', paddingBottom: 0 }}>
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{
+              padding: '10px 16px',
+              fontSize: 13,
+              color: tab === t.id ? 'var(--text)' : 'var(--text2)',
+              fontWeight: tab === t.id ? 600 : 400,
+              borderBottom: tab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
+              marginBottom: -1
+            }}
+          >{t.label}</button>
+        ))}
+      </div>
+
+      {/* RESEARCH TAB */}
+      {tab === 'research' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {!activeToken && (
+            <div className="card" style={{ borderColor: 'var(--orange)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Kein aktiver Apify-Key</div>
+              <div className="muted">Geh in <Link href="/settings">Settings</Link> und lege mindestens einen Apify-Key an.</div>
+            </div>
+          )}
+
+          {/* Controls */}
+          <div className="card">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <input
+                className="inp" style={{ flex: '1 1 220px', maxWidth: 320 }}
+                placeholder="@account hinzufügen"
+                value={accountInput}
+                onChange={e => setAccountInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addAccount()}
+              />
+              <button className="btn btn-ghost btn-sm" onClick={addAccount}><Plus size={14} /> Account</button>
+              <select className="inp inp-sm" style={{ width: 'auto' }} value={r.scraperType} onChange={e => updateResearch({ scraperType: e.target.value })}>
+                <option value="posts">Posts</option>
+                <option value="reels">Reels</option>
+              </select>
+              <input type="number" className="inp inp-sm" style={{ width: 80 }} value={r.daysBack} onChange={e => updateResearch({ daysBack: +e.target.value })} title="Tage zurück" />
+              <input type="number" className="inp inp-sm" style={{ width: 80 }} value={r.limit} onChange={e => updateResearch({ limit: +e.target.value })} title="Limit pro Account" />
+              <button className="btn" disabled={scraping || !activeToken} onClick={runScrape}>
+                <Play size={14} /> {scraping ? 'Scraping...' : 'Scrape'}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {r.accounts.map(a => (
+                <span key={a} className="pill">@{a} <button onClick={() => removeAccount(a)}>×</button></span>
+              ))}
+              {!r.accounts.length && <span className="muted">Keine Accounts — füg welche hinzu</span>}
+            </div>
+
+            {scrapeMsg && <div className="muted" style={{ marginTop: 10 }}>{scrapeMsg}</div>}
+          </div>
+
+          {/* Filter row */}
+          {results.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button className={r.filter === 'viral' ? 'btn btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => updateResearch({ filter: 'viral' })}>Most Viral</button>
+              <button className={r.filter === 'converting' ? 'btn btn-sm' : 'btn btn-ghost btn-sm'} onClick={() => updateResearch({ filter: 'converting' })}>Highest Converting</button>
+              <span className="muted" style={{ marginLeft: 'auto' }}>{filtered.length} Posts</span>
+              <button className="btn btn-ghost btn-sm" onClick={exportVA}><ClipboardList size={14} /> Export VA</button>
+            </div>
+          )}
+
+          {/* Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
+            {filtered.map((it, i) => {
+              const id = it.id || it.shortCode || it.url
+              const isFav = r.favorites.includes(id)
+              const v = it.videoViewCount || it.videoPlayCount || 0
+              const l = it.likesCount || 0
+              return (
+                <div key={id || i} className="card" style={{ padding: 0, overflow: 'hidden', cursor: 'pointer' }} onClick={() => setModalItem(it)}>
+                  {it.displayUrl && <img src={it.displayUrl} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover' }} loading="lazy" />}
+                  <div style={{ padding: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', display: 'flex', justifyContent: 'space-between' }}>
+                      <span>@{it.ownerUsername || it.username}</span>
+                      <span className={ratioClass(it._ratio)}>{it._ratio.toFixed(1)}%</span>
+                    </div>
+                    <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 8, color: 'var(--text2)' }}>
+                      <span>👁 {fmt(v)}</span><span>♥ {fmt(l)}</span>
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); toggleFav(it) }} style={{ flex: 1, justifyContent: 'center' }}>
+                        <Star size={12} fill={isFav ? 'currentColor' : 'none'} />
+                      </button>
+                      <button className="btn btn-sm" onClick={e => { e.stopPropagation(); addToKanban(it) }} style={{ flex: 1, justifyContent: 'center' }}>
+                        <Plus size={12} /> Kanban
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+            {!results.length && !scraping && (
+              <div className="muted" style={{ gridColumn: '1/-1', textAlign: 'center', padding: 60 }}>
+                Noch keine Ergebnisse — füge Accounts hinzu und drück Scrape.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* KANBAN TAB */}
+      {tab === 'kanban' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+          {[['backlog', '📥 Backlog'], ['inprogress', '🚧 In Progress'], ['done', '✅ Done']].map(([col, label]) => (
+            <div key={col} className="kanban-col">
+              <h3 style={{ fontSize: 13, marginBottom: 12, color: 'var(--text2)' }}>{label} <span style={{ color: 'var(--text3)' }}>({r.kanban[col].length})</span></h3>
+              {r.kanban[col].map(c => (
+                <div key={c.id} className="kanban-card">
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>@{c.account}</div>
+                  <div style={{ fontSize: 12 }}>{c.caption || '(keine Caption)'}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>👁 {fmt(c.views)} ♥ {fmt(c.likes)}</div>
+                  <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                    <a href={c.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'center' }}><ExternalLink size={12} /></a>
+                    {col !== 'backlog' && <button className="btn btn-ghost btn-sm" onClick={() => moveCard(c.id, col, col === 'inprogress' ? 'backlog' : 'inprogress')}><ChevronLeft size={12} /></button>}
+                    {col !== 'done' && <button className="btn btn-ghost btn-sm" onClick={() => moveCard(c.id, col, col === 'backlog' ? 'inprogress' : 'done')}><ChevronRight size={12} /></button>}
+                    <button className="btn btn-ghost btn-sm" onClick={() => deleteCard(c.id, col)}><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+              {!r.kanban[col].length && <div className="muted" style={{ textAlign: 'center', padding: 24 }}>leer</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* SESSIONS TAB */}
+      {tab === 'sessions' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {r.sessions.map(s => (
+            <div key={s.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13 }}>{new Date(s.at).toLocaleString('de-DE')}</div>
+                <div className="muted" style={{ marginTop: 2 }}>{s.type} • {s.accounts.length} Accounts • {s.count} Posts{s.keyLabel ? ` • Key: ${s.keyLabel}` : ''}</div>
+              </div>
+              <div className="muted">{s.accounts.slice(0, 3).map(a => '@' + a).join(', ')}{s.accounts.length > 3 ? '...' : ''}</div>
+            </div>
+          ))}
+          {!r.sessions.length && <div className="muted" style={{ textAlign: 'center', padding: 40 }}>Noch keine Sessions</div>}
+        </div>
+      )}
+
+      {/* MODAL */}
+      {modalItem && (
+        <div className="modal-back" onClick={() => setModalItem(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            {modalItem.displayUrl && <img src={modalItem.displayUrl} style={{ width: '100%', borderRadius: '14px 14px 0 0' }} alt="" />}
+            <div style={{ padding: 16 }}>
+              <div className="muted" style={{ fontSize: 13 }}>@{modalItem.ownerUsername || modalItem.username}</div>
+              <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>
+                {modalItem.caption || '(keine Caption)'}
+              </div>
+              <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <a href={modalItem.url || `https://instagram.com/p/${modalItem.shortCode}`} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+                  <ExternalLink size={12} /> Auf Instagram
+                </a>
+                <button className="btn btn-sm" onClick={() => { addToKanban(modalItem); setModalItem(null) }}>
+                  <Plus size={12} /> Kanban
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setModalItem(null)} style={{ marginLeft: 'auto' }}>Schließen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
