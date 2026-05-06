@@ -161,7 +161,7 @@ export default function VideoCreation() {
         body: JSON.stringify({
           wavespeedKey,
           prompt: [imgSettings.stylePrompt, script.imagePrompt].filter(Boolean).join('. '),
-          refImageUrl: persona.refImage && persona.refImage.startsWith('http') ? persona.refImage : undefined,
+          refImage: persona.refImage || undefined,
           resolution: imgSettings.resolution,
           aspectRatio: imgSettings.aspectRatio,
           format: imgSettings.format,

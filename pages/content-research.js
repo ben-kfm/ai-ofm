@@ -97,9 +97,11 @@ export default function ContentResearch() {
         type: r.scraperType,
         accounts: [...r.accounts],
         count: json.total,
-        keyLabel: activeKey.label
+        keyLabel: activeKey.label,
+        items: json.items || []
       }
-      updateResearch({ sessions: [sess, ...(r.sessions || [])].slice(0, 100) })
+      // Keep last 30 sessions (with full items) — older ones get truncated
+      updateResearch({ sessions: [sess, ...(r.sessions || [])].slice(0, 30) })
       toast(`${json.total} Posts gescrapt ✓`, 'success')
     } catch (e) {
       toast('Fehler: ' + e.message, 'error')
@@ -334,15 +336,42 @@ export default function ContentResearch() {
       {/* SESSIONS TAB */}
       {tab === 'sessions' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {r.sessions.map(s => (
-            <div key={s.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-              <div>
-                <div style={{ fontSize: 13 }}>{new Date(s.at).toLocaleString('de-DE')}</div>
-                <div className="muted" style={{ marginTop: 2 }}>{s.type} • {s.accounts.length} Accounts • {s.count} Posts{s.keyLabel ? ` • Key: ${s.keyLabel}` : ''}</div>
+          {r.sessions.map(s => {
+            const hasItems = Array.isArray(s.items) && s.items.length > 0
+            return (
+              <div
+                key={s.id}
+                className="card"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, cursor: hasItems ? 'pointer' : 'default', opacity: hasItems ? 1 : 0.6 }}
+                onClick={() => {
+                  if (!hasItems) return toast('Diese Session hat keine gespeicherten Posts (alt)', 'error')
+                  setResults(s.items)
+                  setTab('research')
+                  toast(`${s.items.length} Posts geladen`, 'success')
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {new Date(s.at).toLocaleString('de-DE')}
+                    {hasItems && <span style={{ fontSize: 10, padding: '2px 6px', background: 'var(--accent-soft, rgba(124,77,255,0.15))', color: 'var(--accent)', borderRadius: 4 }}>klickbar</span>}
+                  </div>
+                  <div className="muted" style={{ marginTop: 2 }}>{s.type} • {s.accounts.length} Accounts • {s.count} Posts{s.keyLabel ? ` • Key: ${s.keyLabel}` : ''}</div>
+                </div>
+                <div className="muted" style={{ marginRight: 8 }}>{s.accounts.slice(0, 3).map(a => '@' + a).join(', ')}{s.accounts.length > 3 ? '...' : ''}</div>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={e => {
+                    e.stopPropagation()
+                    if (!confirm('Session löschen?')) return
+                    updateResearch({ sessions: r.sessions.filter(x => x.id !== s.id) })
+                  }}
+                  title="Session löschen"
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
-              <div className="muted">{s.accounts.slice(0, 3).map(a => '@' + a).join(', ')}{s.accounts.length > 3 ? '...' : ''}</div>
-            </div>
-          ))}
+            )
+          })}
           {!r.sessions.length && <div className="muted" style={{ textAlign: 'center', padding: 40 }}>Noch keine Sessions</div>}
         </div>
       )}
