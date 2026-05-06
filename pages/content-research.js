@@ -47,6 +47,7 @@ export default function ContentResearch() {
   const [tab, setTab] = useState('research')
   const [scraping, setScraping] = useState(false)
   const [scrapeMsg, setScrapeMsg] = useState('')
+  const [scrapeProgress, setScrapeProgress] = useState(null) // { itemsScraped, total, runtimeSecs, etaSecs }
   const [results, setResults] = useState([])
   const [accountInput, setAccountInput] = useState('')
   const [modalItem, setModalItem] = useState(null)
@@ -114,40 +115,84 @@ export default function ContentResearch() {
   async function runScrape() {
     if (!activeToken) return toast('Kein aktiver Apify-Key — in Settings einrichten', 'error')
     if (!projectAccounts.length) return toast('Projekt hat keine Accounts — füg welche hinzu', 'error')
-    setScraping(true); setScrapeMsg(`Starte Apify-Run für Projekt "${activeProject.name}" mit "${activeKey.label}"...`); setResults([])
+    const expectedTotal = projectAccounts.length * (r.limit || 30)
+    setScraping(true)
+    setScrapeMsg(`Starte Apify-Run für "${activeProject.name}"...`)
+    setScrapeProgress({ itemsScraped: 0, total: expectedTotal, runtimeSecs: 0, etaSecs: null })
+    setResults([])
     try {
-      const res = await fetch('/api/scrape', {
+      // 1. Start the Actor run (~5s)
+      const startRes = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: activeToken,
           accounts: projectAccounts,
           type: r.scraperType,
-          daysBack: r.daysBack,
           limit: r.limit
         })
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Unbekannter Fehler')
-      setResults(json.items || [])
+      const startJson = await startRes.json()
+      if (!startRes.ok) throw new Error(startJson.error || 'Start fehlgeschlagen')
+      const { runId, datasetId } = startJson
+
+      // 2. Poll until done (no time limit — each request takes ~3s, runs every 5s)
+      const pollDeadline = Date.now() + 15 * 60 * 1000 // safety cap: 15min
+      let finalItems = null
+      while (Date.now() < pollDeadline) {
+        await new Promise(r => setTimeout(r, 5000))
+        const pollRes = await fetch('/api/scrape-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: activeToken, runId, datasetId, daysBack: r.daysBack })
+        })
+        const pollJson = await pollRes.json()
+        if (pollJson.status === 'SUCCEEDED') {
+          finalItems = pollJson.items || []
+          break
+        }
+        if (pollJson.status && !['RUNNING', 'READY'].includes(pollJson.status)) {
+          throw new Error(pollJson.error || `Status: ${pollJson.status}`)
+        }
+        const secs = pollJson.runtimeSecs || 0
+        const items = pollJson.itemsScraped || 0
+        // ETA: assume current rate continues. Need at least 5s + 5 items for stable estimate.
+        let etaSecs = null
+        if (items >= 5 && secs >= 5 && items < expectedTotal) {
+          const rate = items / secs
+          etaSecs = Math.max(0, Math.round((expectedTotal - items) / rate))
+        }
+        setScrapeProgress({ itemsScraped: items, total: expectedTotal, runtimeSecs: secs, etaSecs })
+        setScrapeMsg('')
+      }
+      if (finalItems === null) throw new Error('Timeout (>15min)')
+
+      setResults(finalItems)
       const sess = {
         id: Date.now(),
         at: new Date().toISOString(),
         type: r.scraperType,
         accounts: [...projectAccounts],
-        count: json.total,
+        count: finalItems.length,
         keyLabel: activeKey.label,
         projectName: activeProject.name,
-        items: json.items || []
+        items: finalItems
       }
-      // Keep last 30 sessions (with full items) — older ones get truncated
       updateResearch({ sessions: [sess, ...(r.sessions || [])].slice(0, 30) })
-      toast(`${json.total} Posts gescrapt ✓`, 'success')
+      toast(`${finalItems.length} Posts gescrapt ✓`, 'success')
     } catch (e) {
       toast('Fehler: ' + e.message, 'error')
     } finally {
-      setScraping(false); setScrapeMsg('')
+      setScraping(false); setScrapeMsg(''); setScrapeProgress(null)
     }
+  }
+
+  function fmtTime(s) {
+    if (s == null) return '–'
+    if (s < 60) return `${s}s`
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m}m ${r}s`
   }
 
   function addAccount() {
@@ -306,6 +351,34 @@ export default function ContentResearch() {
             </div>
 
             {scrapeMsg && <div className="muted" style={{ marginTop: 10 }}>{scrapeMsg}</div>}
+
+            {scrapeProgress && (
+              (() => {
+                const { itemsScraped, total, runtimeSecs, etaSecs } = scrapeProgress
+                const pct = total > 0 ? Math.min(100, Math.round((itemsScraped / total) * 100)) : 0
+                return (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
+                      <span style={{ color: 'var(--text2)' }}>{itemsScraped} / {total} Posts</span>
+                      <span style={{ display: 'flex', gap: 14, color: 'var(--text2)' }}>
+                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{pct}%</span>
+                        <span title="Bereits gelaufen">⏱ {fmtTime(runtimeSecs)}</span>
+                        <span title="Geschätzte Restzeit">ETA: {etaSecs != null ? fmtTime(etaSecs) : '...'}</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 8, background: 'var(--bg3, rgba(255,255,255,0.08))', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: pct + '%',
+                        background: 'var(--accent)',
+                        transition: 'width 0.4s ease',
+                        backgroundImage: 'linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent)))'
+                      }} />
+                    </div>
+                  </div>
+                )
+              })()
+            )}
           </div>
 
           {/* Filter row */}
