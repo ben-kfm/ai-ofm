@@ -53,8 +53,47 @@ export default function ContentResearch() {
   const [modalIdx, setModalIdx] = useState(0)
 
   const r = data.research
+  const projects = r.projects || []
+  const activeProject = projects.find(p => p.id === r.activeProjectId) || projects[0]
+  const projectAccounts = activeProject?.accounts || []
   const activeKey = data.apifyKeys.find(k => k.id === data.activeApifyKeyId) || null
   const activeToken = activeKey?.token || ''
+
+  // Project management
+  function setActiveProject(id) {
+    updateResearch({ activeProjectId: id })
+  }
+  function updateActiveProject(patch) {
+    updateResearch({
+      projects: projects.map(p => p.id === activeProject.id ? { ...p, ...patch } : p)
+    })
+  }
+  function addProject() {
+    const name = prompt('Name des neuen Projekts?')?.trim()
+    if (!name) return
+    if (projects.some(p => p.name === name)) return toast('Projekt-Name existiert schon', 'error')
+    const id = 'p' + Date.now()
+    updateResearch({
+      projects: [...projects, { id, name, accounts: [] }],
+      activeProjectId: id
+    })
+    toast(`Projekt "${name}" erstellt`, 'success')
+  }
+  function renameProject() {
+    const name = prompt('Neuer Name für "' + activeProject.name + '"?', activeProject.name)?.trim()
+    if (!name || name === activeProject.name) return
+    updateActiveProject({ name })
+  }
+  function deleteProject() {
+    if (projects.length <= 1) return toast('Mindestens 1 Projekt muss bleiben', 'error')
+    if (!confirm(`Projekt "${activeProject.name}" mit ${projectAccounts.length} Account${projectAccounts.length === 1 ? '' : 's'} wirklich löschen?`)) return
+    const remaining = projects.filter(p => p.id !== activeProject.id)
+    updateResearch({
+      projects: remaining,
+      activeProjectId: remaining[0].id
+    })
+    toast('Projekt gelöscht', 'success')
+  }
 
   // Reset modal index when item changes
   useEffect(() => { setModalIdx(0) }, [modalItem])
@@ -74,15 +113,15 @@ export default function ContentResearch() {
 
   async function runScrape() {
     if (!activeToken) return toast('Kein aktiver Apify-Key — in Settings einrichten', 'error')
-    if (!r.accounts.length) return toast('Mindestens 1 Account hinzufügen', 'error')
-    setScraping(true); setScrapeMsg(`Starte Apify-Run mit "${activeKey.label}"...`); setResults([])
+    if (!projectAccounts.length) return toast('Projekt hat keine Accounts — füg welche hinzu', 'error')
+    setScraping(true); setScrapeMsg(`Starte Apify-Run für Projekt "${activeProject.name}" mit "${activeKey.label}"...`); setResults([])
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: activeToken,
-          accounts: r.accounts,
+          accounts: projectAccounts,
           type: r.scraperType,
           daysBack: r.daysBack,
           limit: r.limit
@@ -95,9 +134,10 @@ export default function ContentResearch() {
         id: Date.now(),
         at: new Date().toISOString(),
         type: r.scraperType,
-        accounts: [...r.accounts],
+        accounts: [...projectAccounts],
         count: json.total,
         keyLabel: activeKey.label,
+        projectName: activeProject.name,
         items: json.items || []
       }
       // Keep last 30 sessions (with full items) — older ones get truncated
@@ -113,11 +153,11 @@ export default function ContentResearch() {
   function addAccount() {
     const a = accountInput.trim().replace('@', '')
     if (!a) return
-    if (r.accounts.includes(a)) return toast('Account schon drin', 'error')
-    updateResearch({ accounts: [...r.accounts, a] })
+    if (projectAccounts.includes(a)) return toast('Account schon im Projekt', 'error')
+    updateActiveProject({ accounts: [...projectAccounts, a] })
     setAccountInput('')
   }
-  const removeAccount = a => updateResearch({ accounts: r.accounts.filter(x => x !== a) })
+  const removeAccount = a => updateActiveProject({ accounts: projectAccounts.filter(x => x !== a) })
 
   function toggleFav(item) {
     const id = item.id || item.shortCode || item.url
@@ -214,12 +254,34 @@ export default function ContentResearch() {
             </div>
           )}
 
+          {/* Project selector */}
+          <div className="card" style={{ background: 'var(--bg2)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Projekt</span>
+              <select
+                className="inp inp-sm" style={{ minWidth: 180 }}
+                value={activeProject?.id || ''}
+                onChange={e => setActiveProject(e.target.value)}
+              >
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.accounts.length})</option>
+                ))}
+              </select>
+              <button className="btn btn-ghost btn-sm" onClick={addProject} title="Neues Projekt"><Plus size={14} /> Neu</button>
+              <button className="btn btn-ghost btn-sm" onClick={renameProject} title="Umbenennen">Umbenennen</button>
+              <button className="btn btn-ghost btn-sm" onClick={deleteProject} title="Projekt löschen" disabled={projects.length <= 1}>
+                <Trash2 size={14} />
+              </button>
+              <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{projectAccounts.length} Account{projectAccounts.length === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+
           {/* Controls */}
           <div className="card">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               <input
                 className="inp" style={{ flex: '1 1 220px', maxWidth: 320 }}
-                placeholder="@account hinzufügen"
+                placeholder={`@account zu "${activeProject?.name || 'Projekt'}" hinzufügen`}
                 value={accountInput}
                 onChange={e => setAccountInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addAccount()}
@@ -231,16 +293,16 @@ export default function ContentResearch() {
               </select>
               <input type="number" className="inp inp-sm" style={{ width: 80 }} value={r.daysBack} onChange={e => updateResearch({ daysBack: +e.target.value })} title="Tage zurück" />
               <input type="number" className="inp inp-sm" style={{ width: 80 }} value={r.limit} onChange={e => updateResearch({ limit: +e.target.value })} title="Limit pro Account" />
-              <button className="btn" disabled={scraping || !activeToken} onClick={runScrape}>
-                <Play size={14} /> {scraping ? 'Scraping...' : 'Scrape'}
+              <button className="btn" disabled={scraping || !activeToken || !projectAccounts.length} onClick={runScrape}>
+                <Play size={14} /> {scraping ? 'Scraping...' : `Scrape "${activeProject?.name || ''}"`}
               </button>
             </div>
 
             <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {r.accounts.map(a => (
+              {projectAccounts.map(a => (
                 <span key={a} className="pill">@{a} <button onClick={() => removeAccount(a)}>×</button></span>
               ))}
-              {!r.accounts.length && <span className="muted">Keine Accounts — füg welche hinzu</span>}
+              {!projectAccounts.length && <span className="muted">Keine Accounts in "{activeProject?.name}" — füg welche hinzu</span>}
             </div>
 
             {scrapeMsg && <div className="muted" style={{ marginTop: 10 }}>{scrapeMsg}</div>}
@@ -355,7 +417,7 @@ export default function ContentResearch() {
                     {new Date(s.at).toLocaleString('de-DE')}
                     {hasItems && <span style={{ fontSize: 10, padding: '2px 6px', background: 'var(--accent-soft, rgba(124,77,255,0.15))', color: 'var(--accent)', borderRadius: 4 }}>klickbar</span>}
                   </div>
-                  <div className="muted" style={{ marginTop: 2 }}>{s.type} • {s.accounts.length} Accounts • {s.count} Posts{s.keyLabel ? ` • Key: ${s.keyLabel}` : ''}</div>
+                  <div className="muted" style={{ marginTop: 2 }}>{s.projectName ? `${s.projectName} • ` : ''}{s.type} • {s.accounts.length} Accounts • {s.count} Posts{s.keyLabel ? ` • Key: ${s.keyLabel}` : ''}</div>
                 </div>
                 <div className="muted" style={{ marginRight: 8 }}>{s.accounts.slice(0, 3).map(a => '@' + a).join(', ')}{s.accounts.length > 3 ? '...' : ''}</div>
                 <button
