@@ -1,40 +1,31 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
-  Video, Image as ImageIcon, Wand2, Play, Upload, Settings as SettingsIcon,
-  ChevronDown, ChevronRight, Plus, Trash2, User, Save, RefreshCw, Download
+  Video, Image as ImageIcon, Wand2, Play, Upload, ChevronDown, ChevronRight,
+  Plus, Trash2, User, RefreshCw, Download, Sparkles, Eye, Filter
 } from 'lucide-react'
 import { useStore } from '../lib/store'
 
-const RESOLUTION_OPTIONS = [
-  { value: 1024, label: '1K (1024)' },
-  { value: 2048, label: '2K (2048)' },
-  { value: 4096, label: '4K (4096)' }
-]
 const ASPECT_OPTIONS = ['9:16', '4:5', '1:1', '16:9', '3:4', '4:3']
 const VIDEO_RES_OPTIONS = ['480p', '720p', '1080p']
-const FPS_OPTIONS = [24, 30, 60]
 
-function Section({ title, icon: Icon, children, defaultOpen = false, color }) {
-  const [open, setOpen] = useState(defaultOpen)
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-          padding: '10px 14px', background: 'var(--bg2)',
-          border: '1px solid var(--border-soft)', borderRadius: 10,
-          fontSize: 13, fontWeight: 500, cursor: 'pointer', color: 'var(--text)'
-        }}
-      >
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        {Icon && <Icon size={14} style={{ color: color || 'var(--accent)' }} />}
-        <span>{title}</span>
-      </button>
-      {open && <div style={{ padding: '12px 14px', background: 'var(--bg2)', border: '1px solid var(--border-soft)', borderTop: 'none', borderRadius: '0 0 10px 10px', marginTop: -1 }}>{children}</div>}
-    </div>
-  )
+function proxy(url) { return url ? `/api/img?url=${encodeURIComponent(url)}` : '' }
+
+function getReelMedia(item) {
+  if (Array.isArray(item.childPosts) && item.childPosts.length > 0) return item.childPosts[0]?.displayUrl || ''
+  return item.displayUrl || (Array.isArray(item.images) ? item.images[0] : '')
 }
+function getReelVideoUrl(item) {
+  return item.videoUrl || item.video_url || ''
+}
+function engagementRatio(item) {
+  const likes = item.likesCount || item.likes || 0
+  const comments = item.commentsCount || item.comments || 0
+  const views = item.videoViewCount || item.videoPlayCount || item.viewsCount || item.views || likes
+  if (!views) return 0
+  return ((likes + comments * 3) / views) * 100
+}
+function fmt(n) { if (!n) return '0'; if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k'; return String(n) }
+function fmtTime(s) { if (s == null) return '–'; if (s < 60) return `${s}s`; return `${Math.floor(s/60)}m ${s%60}s` }
 
 function FieldGroup({ label, children, hint }) {
   return (
@@ -46,52 +37,135 @@ function FieldGroup({ label, children, hint }) {
   )
 }
 
+function Section({ title, icon: Icon, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: 'var(--bg2)', border: '1px solid var(--border-soft)', borderRadius: 10, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: 'var(--text)' }}>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        {Icon && <Icon size={14} style={{ color: 'var(--accent)' }} />}
+        <span>{title}</span>
+      </button>
+      {open && <div style={{ padding: '12px 14px', background: 'var(--bg2)', border: '1px solid var(--border-soft)', borderTop: 'none', borderRadius: '0 0 10px 10px', marginTop: -1 }}>{children}</div>}
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange, label }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
+      <span style={{ position: 'relative', display: 'inline-block', width: 36, height: 20 }}>
+        <input type="checkbox" checked={!!checked} onChange={e => onChange(e.target.checked)}
+          style={{ opacity: 0, width: 0, height: 0 }} />
+        <span style={{ position: 'absolute', inset: 0, borderRadius: 10, background: checked ? 'var(--accent)' : 'rgba(255,255,255,0.15)', transition: 'background 0.2s' }} />
+        <span style={{ position: 'absolute', top: 2, left: checked ? 18 : 2, width: 16, height: 16, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+      </span>
+      <span style={{ fontSize: 13 }}>{label}</span>
+    </label>
+  )
+}
+
+function VideoSettings({ settings, onChange }) {
+  return (
+    <>
+      <FieldGroup label={`Duration: ${settings.duration}s`}>
+        <input type="range" min="1" max="15" value={settings.duration}
+          onChange={e => onChange({ ...settings, duration: +e.target.value })}
+          style={{ width: '100%' }} />
+      </FieldGroup>
+      <FieldGroup label="Resolution">
+        <select className="inp inp-sm" value={settings.resolution}
+          onChange={e => onChange({ ...settings, resolution: e.target.value })}>
+          {VIDEO_RES_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </FieldGroup>
+      <FieldGroup label="Aspect Ratio">
+        <select className="inp inp-sm" value={settings.aspectRatio}
+          onChange={e => onChange({ ...settings, aspectRatio: e.target.value })}>
+          {ASPECT_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+      </FieldGroup>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+        <Toggle label="Audio generieren" checked={settings.generateAudio}
+          onChange={v => onChange({ ...settings, generateAudio: v })} />
+        <Toggle label="Camera fixed" checked={settings.cameraFixed}
+          onChange={v => onChange({ ...settings, cameraFixed: v })} />
+      </div>
+    </>
+  )
+}
+
 export default function VideoCreation() {
   const { data, update, toast, loaded } = useStore()
-  const fileInputRef = useRef(null)
+  const activeTab = data.videoCreation?.activeTab || 'talkingHead'
+  const setActiveTab = id => update(d => ({ ...d, videoCreation: { ...d.videoCreation, activeTab: id } }))
 
-  const [topicMode, setTopicMode] = useState('pool') // pool / custom / random
+  if (!loaded) return null
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border-soft)' }}>
+        {[
+          { id: 'talkingHead', label: 'Talking Head', icon: User },
+          { id: 'videoGen', label: 'Video Generation', icon: Sparkles }
+        ].map(t => {
+          const Icon = t.icon
+          const active = activeTab === t.id
+          return (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: '10px 18px', display: 'flex', alignItems: 'center', gap: 8,
+                fontSize: 13, fontWeight: active ? 600 : 400,
+                color: active ? 'var(--text)' : 'var(--text2)',
+                borderBottom: active ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: -1
+              }}>
+              <Icon size={14} /> {t.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {activeTab === 'talkingHead' && <TalkingHeadTab />}
+      {activeTab === 'videoGen' && <VideoGenTab />}
+    </div>
+  )
+}
+
+/* ============================================================ TAB 1 — TALKING HEAD ============================================================ */
+function TalkingHeadTab() {
+  const { data, update, toast } = useStore()
+  const fileInputRef = useRef(null)
+  const [topicMode, setTopicMode] = useState('pool')
   const [customTopic, setCustomTopic] = useState('')
   const [selectedTopic, setSelectedTopic] = useState('')
-
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState('')
-  const [lastResult, setLastResult] = useState(null) // { imagePrompt, videoDirection, imageUrl, videoUrl }
+  const [lastResult, setLastResult] = useState(null)
 
-  // Persona management
   const personas = data.videoCreation?.personas || []
   const activePersonaId = data.videoCreation?.activePersonaId || personas[0]?.id
   const persona = personas.find(p => p.id === activePersonaId) || personas[0]
 
-  // Live settings (start from persona defaults, user can edit)
-  const [imgSettings, setImgSettings] = useState(persona?.imageDefaults || {})
-  const [vidSettings, setVidSettings] = useState(persona?.videoDefaults || {})
-
-  // Reset settings when persona changes
-  useEffect(() => {
-    if (persona) {
-      setImgSettings(persona.imageDefaults)
-      setVidSettings(persona.videoDefaults)
-    }
-  }, [activePersonaId])
-
   const wavespeedKey = data.serviceKeys?.wavespeed
   const anthropicKey = data.serviceKeys?.anthropic
+
+  const settings = persona?.videoDefaults || { duration: 5, resolution: '720p', aspectRatio: '9:16', generateAudio: false, cameraFixed: false }
+  const stylePrompt = persona?.imageDefaults?.stylePrompt || ''
 
   function updatePersona(patch) {
     update(d => ({
       ...d,
       videoCreation: {
         ...d.videoCreation,
-        personas: d.videoCreation.personas.map(p =>
-          p.id === activePersonaId ? { ...p, ...patch } : p
-        )
+        personas: d.videoCreation.personas.map(p => p.id === activePersonaId ? { ...p, ...patch } : p)
       }
     }))
   }
-  function setActivePersona(id) {
-    update(d => ({ ...d, videoCreation: { ...d.videoCreation, activePersonaId: id } }))
-  }
+  function updateSettings(patch) { updatePersona({ videoDefaults: { ...persona.videoDefaults, ...patch } }) }
+  function updateImageDefaults(patch) { updatePersona({ imageDefaults: { ...persona.imageDefaults, ...patch } }) }
+  function setActivePersona(id) { update(d => ({ ...d, videoCreation: { ...d.videoCreation, activePersonaId: id } })) }
   function addPersona() {
     const name = prompt('Name der neuen Persona?')
     if (!name) return
@@ -111,18 +185,13 @@ export default function VideoCreation() {
       }
     }))
   }
-
   function onFileChosen(file) {
     if (!file) return
     if (file.size > 5 * 1024 * 1024) return toast('Max 5MB für Reference-Bild', 'error')
     const reader = new FileReader()
-    reader.onload = () => {
-      updatePersona({ refImage: reader.result })
-      toast('Reference-Bild gespeichert', 'success')
-    }
+    reader.onload = () => { updatePersona({ refImage: reader.result }); toast('Reference-Bild gespeichert', 'success') }
     reader.readAsDataURL(file)
   }
-
   function addTopicToPool() {
     const t = prompt('Neues Topic für ' + persona.name + ':')
     if (!t) return
@@ -135,18 +204,15 @@ export default function VideoCreation() {
   async function generate() {
     if (!wavespeedKey) return toast('WaveSpeed-Key fehlt (Settings)', 'error')
     if (!anthropicKey) return toast('Anthropic-Key fehlt (Settings)', 'error')
-
     let topic = ''
     if (topicMode === 'custom') topic = customTopic.trim()
     else if (topicMode === 'random') topic = persona.topicPool[Math.floor(Math.random() * persona.topicPool.length)]
     else topic = selectedTopic || persona.topicPool[0]
     if (!topic) return toast('Topic fehlt', 'error')
 
-    setGenerating(true)
-    setLastResult(null)
+    setGenerating(true); setLastResult(null)
     try {
-      // 1. Claude → image prompt + video direction
-      setProgress('Claude generiert Prompt...')
+      setProgress('Claude generiert Prompts...')
       const scriptRes = await fetch('/api/anthropic/script', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ anthropicKey, systemPrompt: persona.claudeSystemPrompt, topic })
@@ -154,20 +220,15 @@ export default function VideoCreation() {
       const script = await scriptRes.json()
       if (!scriptRes.ok) throw new Error(script.error || 'Script-Gen fehlgeschlagen')
 
-      // 2. WaveSpeed Nano Banana Pro → image
       setProgress('Nano Banana Pro generiert Bild...')
       const imgRes = await fetch('/api/wavespeed/image', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           wavespeedKey,
-          prompt: [imgSettings.stylePrompt, script.imagePrompt].filter(Boolean).join('. '),
+          prompt: [stylePrompt, script.imagePrompt].filter(Boolean).join('. '),
           refImage: persona.refImage || undefined,
-          resolution: imgSettings.resolution,
-          aspectRatio: imgSettings.aspectRatio,
-          format: imgSettings.format,
-          jpegQuality: imgSettings.jpegQuality,
-          seed: imgSettings.seed,
-          count: imgSettings.count
+          resolution: 2048, aspectRatio: settings.aspectRatio,
+          format: 'jpeg', jpegQuality: 92, seed: 0, count: 1
         })
       })
       const imgJson = await imgRes.json()
@@ -175,28 +236,25 @@ export default function VideoCreation() {
       const imageUrl = imgJson.urls?.[0]
       if (!imageUrl) throw new Error('Keine Image-URL')
 
-      // 3. WaveSpeed Seedance 2.0 → video
-      setProgress('Seedance 2.0 generiert Video (kann 1-2 Min dauern)...')
+      setProgress('Seedance 2.0 generiert Video (1-2 Min)...')
       const vidStartRes = await fetch('/api/wavespeed/video', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          wavespeedKey,
-          imageUrl,
+          wavespeedKey, imageUrl,
           prompt: script.imagePrompt,
-          duration: vidSettings.duration,
-          resolution: vidSettings.resolution,
-          aspectRatio: vidSettings.aspectRatio,
-          frameRate: vidSettings.frameRate,
-          direction: [vidSettings.direction, script.videoDirection].filter(Boolean).join('. '),
-          negativePrompt: vidSettings.negativePrompt
+          duration: settings.duration,
+          resolution: settings.resolution,
+          aspectRatio: settings.aspectRatio,
+          direction: script.videoDirection || '',
+          generateAudio: settings.generateAudio,
+          cameraFixed: settings.cameraFixed
         })
       })
       const vidStart = await vidStartRes.json()
       if (!vidStartRes.ok) throw new Error(vidStart.error || 'Video-Submit fehlgeschlagen')
 
-      // Poll for video
       let videoUrl = ''
-      const deadline = Date.now() + 5 * 60 * 1000 // 5 min max
+      const deadline = Date.now() + 5 * 60 * 1000
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 4000))
         const pollRes = await fetch('/api/wavespeed/poll', {
@@ -204,30 +262,20 @@ export default function VideoCreation() {
           body: JSON.stringify({ wavespeedKey, taskId: vidStart.taskId })
         })
         const poll = await pollRes.json()
-        if (poll.status === 'completed' && poll.urls?.[0]) {
-          videoUrl = poll.urls[0]; break
-        }
+        if (poll.status === 'completed' && poll.urls?.[0]) { videoUrl = poll.urls[0]; break }
         if (poll.status === 'failed') throw new Error('Video-Gen fehlgeschlagen')
         setProgress(`Seedance 2.0: ${poll.status || 'processing'}...`)
       }
       if (!videoUrl) throw new Error('Video-Gen Timeout (>5 Min)')
 
       const result = {
-        id: 'r' + Date.now(),
-        at: new Date().toISOString(),
-        personaId: activePersonaId,
-        personaName: persona.name,
-        topic,
-        imagePrompt: script.imagePrompt,
-        videoDirection: script.videoDirection,
-        imageUrl, videoUrl,
-        imageSettings: { ...imgSettings },
-        videoSettings: { ...vidSettings }
+        id: 'r' + Date.now(), at: new Date().toISOString(),
+        kind: 'talkingHead',
+        personaId: activePersonaId, personaName: persona.name,
+        topic, imagePrompt: script.imagePrompt, videoDirection: script.videoDirection,
+        imageUrl, videoUrl, settings: { ...settings }
       }
-      update(d => ({
-        ...d,
-        videoCreation: { ...d.videoCreation, runs: [result, ...(d.videoCreation.runs || [])].slice(0, 50) }
-      }))
+      update(d => ({ ...d, videoCreation: { ...d.videoCreation, runs: [result, ...(d.videoCreation.runs || [])].slice(0, 50) } }))
       setLastResult(result)
       toast('Generation fertig ✓', 'success')
     } catch (e) {
@@ -237,65 +285,45 @@ export default function VideoCreation() {
     }
   }
 
-  if (!loaded) return null
-  if (!persona) return <div className="muted">Keine Persona vorhanden — wird nach erstem Load erstellt.</div>
-
+  if (!persona) return <div className="muted">Keine Persona vorhanden.</div>
   const needsSetup = !wavespeedKey || !anthropicKey
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-      {/* Persona Switcher */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <User size={16} color="var(--text2)" />
         <span className="muted">Persona:</span>
         {personas.map(p => (
           <button key={p.id} onClick={() => setActivePersona(p.id)}
-            className={p.id === activePersonaId ? 'btn btn-sm' : 'btn btn-ghost btn-sm'}>
-            {p.name}
-          </button>
+            className={p.id === activePersonaId ? 'btn btn-sm' : 'btn btn-ghost btn-sm'}>{p.name}</button>
         ))}
         <button className="btn-icon" onClick={addPersona} title="Neue Persona"><Plus size={14} /></button>
-        {personas.length > 1 && (
-          <button className="btn-icon" onClick={deletePersona} title="Persona löschen"><Trash2 size={14} /></button>
-        )}
+        {personas.length > 1 && <button className="btn-icon" onClick={deletePersona} title="Persona löschen"><Trash2 size={14} /></button>}
       </div>
 
       {needsSetup && (
         <div className="card" style={{ borderColor: 'var(--orange)' }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Setup unvollständig</div>
-          <div className="muted">
-            Brauchst <a href="/settings">WaveSpeed-Key {!wavespeedKey ? '✗' : '✓'}</a> und <a href="/settings">Anthropic-Key {!anthropicKey ? '✗' : '✓'}</a> in Settings.
-          </div>
+          <div className="muted">Brauchst <a href="/settings">WaveSpeed-Key {!wavespeedKey ? '✗' : '✓'}</a> und <a href="/settings">Anthropic-Key {!anthropicKey ? '✗' : '✓'}</a> in Settings.</div>
         </div>
       )}
 
-      {/* 3-Column Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
-
-        {/* REFERENCE */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
         <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
           <div className="card-title">REFERENCE</div>
-          <div
-            onClick={() => fileInputRef.current?.click()}
+          <div onClick={() => fileInputRef.current?.click()}
             onDragOver={e => e.preventDefault()}
             onDrop={e => { e.preventDefault(); onFileChosen(e.dataTransfer.files[0]) }}
-            style={{
-              border: '2px dashed var(--border)', borderRadius: 10,
-              padding: 14, textAlign: 'center', cursor: 'pointer',
-              background: 'var(--bg3)', marginBottom: 10
-            }}
-          >
+            style={{ border: '2px dashed var(--border)', borderRadius: 10, padding: 14, textAlign: 'center', cursor: 'pointer', background: 'var(--bg3)', marginBottom: 10 }}>
             <Upload size={20} style={{ marginBottom: 4 }} />
             <div style={{ fontSize: 12, fontWeight: 500 }}>Drag & drop oder klick</div>
             <div className="muted" style={{ fontSize: 11 }}>JPG/PNG/WebP · max 5MB</div>
           </div>
           <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }}
             onChange={e => onFileChosen(e.target.files[0])} />
-
           {persona.refImage && (
             <div style={{ position: 'relative' }}>
-              <img src={persona.refImage} alt="Reference" style={{ width: '100%', borderRadius: 8, display: 'block' }} />
+              <img src={persona.refImage} alt="" style={{ width: '100%', borderRadius: 8 }} />
               <button className="btn-icon" onClick={() => updatePersona({ refImage: '' })}
                 style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,0.6)', color: 'white' }}>
                 <Trash2 size={12} />
@@ -303,126 +331,32 @@ export default function VideoCreation() {
             </div>
           )}
           {!persona.refImage && <div className="muted" style={{ textAlign: 'center', padding: 20 }}>kein Reference-Bild</div>}
-
-          <FieldGroup label="Reference-URL (alternativ zu Upload)" hint="Wird benutzt wenn kein Upload da ist">
-            <input className="inp inp-sm" placeholder="https://..."
-              value={persona.refImage?.startsWith('http') ? persona.refImage : ''}
-              onChange={e => updatePersona({ refImage: e.target.value })} />
-          </FieldGroup>
         </div>
 
-        {/* IMAGE · NANO BANANA PRO */}
-        <div className="card" style={{ borderLeft: '3px solid var(--accent2)' }}>
-          <div className="card-title"><ImageIcon size={14} /> IMAGE · Nano Banana Pro</div>
-
-          <FieldGroup label="Resolution">
-            <select className="inp inp-sm" value={imgSettings.resolution}
-              onChange={e => setImgSettings({ ...imgSettings, resolution: +e.target.value })}>
-              {RESOLUTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </FieldGroup>
-
-          <FieldGroup label="Aspect Ratio">
-            <select className="inp inp-sm" value={imgSettings.aspectRatio}
-              onChange={e => setImgSettings({ ...imgSettings, aspectRatio: e.target.value })}>
-              {ASPECT_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </FieldGroup>
-
-          <FieldGroup label="Output format">
-            <select className="inp inp-sm" value={imgSettings.format}
-              onChange={e => setImgSettings({ ...imgSettings, format: e.target.value })}>
-              <option value="jpeg">jpeg</option>
-              <option value="png">png</option>
-              <option value="webp">webp</option>
-            </select>
-          </FieldGroup>
-
-          {imgSettings.format === 'jpeg' && (
-            <FieldGroup label={`JPEG quality: ${imgSettings.jpegQuality}`}>
-              <input type="range" min="1" max="100" value={imgSettings.jpegQuality}
-                onChange={e => setImgSettings({ ...imgSettings, jpegQuality: +e.target.value })}
-                style={{ width: '100%' }} />
-            </FieldGroup>
-          )}
-
-          <FieldGroup label="Seed (0 = random)">
-            <input type="number" className="inp inp-sm" value={imgSettings.seed}
-              onChange={e => setImgSettings({ ...imgSettings, seed: +e.target.value })} />
-          </FieldGroup>
-
-          <FieldGroup label="Anzahl Bilder pro Run">
-            <input type="number" min="1" max="4" className="inp inp-sm" value={imgSettings.count}
-              onChange={e => setImgSettings({ ...imgSettings, count: +e.target.value })} />
-          </FieldGroup>
-
-          <Section title="Image style prompt" icon={Wand2}>
-            <textarea className="inp" rows="3" placeholder="z.B. soft golden-hour lighting, Christian aesthetic..."
-              value={imgSettings.stylePrompt}
-              onChange={e => setImgSettings({ ...imgSettings, stylePrompt: e.target.value })} />
-          </Section>
+        <div className="card" style={{ borderLeft: '3px solid #a855f7' }}>
+          <div className="card-title"><ImageIcon size={14} /> IMAGE PROMPT (Nano Banana)</div>
+          <textarea className="inp" rows="8" placeholder="z.B. soft golden-hour lighting, Christian aesthetic, cozy bedroom..."
+            value={stylePrompt}
+            onChange={e => updateImageDefaults({ stylePrompt: e.target.value })} />
+          <div className="muted" style={{ marginTop: 6, fontSize: 11 }}>
+            Bleibt persistent. Wird mit dem Topic-spezifischen Prompt von Claude kombiniert.
+          </div>
         </div>
 
-        {/* VIDEO · SEEDANCE 2.0 */}
-        <div className="card" style={{ borderLeft: '3px solid var(--green)' }}>
-          <div className="card-title"><Video size={14} /> VIDEO · Seedance 2.0</div>
-
-          <FieldGroup label={`Duration: ${vidSettings.duration}s`}>
-            <input type="range" min="1" max="15" value={vidSettings.duration}
-              onChange={e => setVidSettings({ ...vidSettings, duration: +e.target.value })}
-              style={{ width: '100%' }} />
-          </FieldGroup>
-
-          <FieldGroup label="Resolution">
-            <select className="inp inp-sm" value={vidSettings.resolution}
-              onChange={e => setVidSettings({ ...vidSettings, resolution: e.target.value })}>
-              {VIDEO_RES_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </FieldGroup>
-
-          <FieldGroup label="Aspect Ratio">
-            <select className="inp inp-sm" value={vidSettings.aspectRatio}
-              onChange={e => setVidSettings({ ...vidSettings, aspectRatio: e.target.value })}>
-              {ASPECT_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </FieldGroup>
-
-          <FieldGroup label="Frame rate (FPS)">
-            <select className="inp inp-sm" value={vidSettings.frameRate}
-              onChange={e => setVidSettings({ ...vidSettings, frameRate: +e.target.value })}>
-              {FPS_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
-          </FieldGroup>
-
-          <FieldGroup label="Batch (Videos pro Run)">
-            <input type="number" min="1" max="5" className="inp inp-sm" value={vidSettings.batch}
-              onChange={e => setVidSettings({ ...vidSettings, batch: +e.target.value })} />
-          </FieldGroup>
-
-          <Section title="Video direction (anti-zoom etc.)" icon={Wand2}>
-            <textarea className="inp" rows="2" placeholder="z.B. anti-zoom, slow push-in, idle breathing..."
-              value={vidSettings.direction}
-              onChange={e => setVidSettings({ ...vidSettings, direction: e.target.value })} />
-          </Section>
-
-          <Section title="Negative prompt (optional)">
-            <textarea className="inp" rows="2" placeholder="z.B. distorted face, extra limbs..."
-              value={vidSettings.negativePrompt}
-              onChange={e => setVidSettings({ ...vidSettings, negativePrompt: e.target.value })} />
-          </Section>
+        <div className="card" style={{ borderLeft: '3px solid #22c55e' }}>
+          <div className="card-title"><Video size={14} /> VIDEO (Seedance 2.0)</div>
+          <VideoSettings settings={settings} onChange={updateSettings} />
         </div>
       </div>
 
-      {/* TOPIC */}
       <div className="card">
         <div className="card-title">TOPIC</div>
         <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
-          {[['pool', 'From pool'], ['custom', 'Custom'], ['random', 'Random per video']].map(([v, l]) => (
+          {[['pool', 'From pool'], ['custom', 'Custom'], ['random', 'Random']].map(([v, l]) => (
             <button key={v} onClick={() => setTopicMode(v)}
               className={topicMode === v ? 'btn btn-sm' : 'btn btn-ghost btn-sm'}>{l}</button>
           ))}
         </div>
-
         {topicMode === 'pool' && (
           <select className="inp" value={selectedTopic || persona.topicPool[0] || ''}
             onChange={e => setSelectedTopic(e.target.value)}>
@@ -434,9 +368,8 @@ export default function VideoCreation() {
             value={customTopic} onChange={e => setCustomTopic(e.target.value)} />
         )}
         {topicMode === 'random' && (
-          <div className="muted">Wird zufällig aus dem Pool von "{persona.name}" gewählt ({persona.topicPool.length} Topics)</div>
+          <div className="muted">Wird zufällig aus Pool gewählt ({persona.topicPool.length} Topics)</div>
         )}
-
         <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
           <span className="muted">Pool:</span>
           {persona.topicPool.map((t, i) => (
@@ -449,81 +382,420 @@ export default function VideoCreation() {
         </div>
       </div>
 
-      {/* PERSONA — Claude system prompt */}
       <Section title={`Persona · ${persona.name}'s voice (Claude system prompt)`} icon={User}>
         <textarea className="inp" rows="6"
           value={persona.claudeSystemPrompt}
           onChange={e => updatePersona({ claudeSystemPrompt: e.target.value })} />
-        <div className="muted" style={{ marginTop: 6 }}>
-          Wird als <code>system</code>-Prompt an Claude geschickt — bestimmt Stimme, Stil, Werte der Persona.
-        </div>
       </Section>
 
-      {/* GENERATE */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '20px 0' }}>
         <button className="btn" disabled={generating || needsSetup} onClick={generate}
           style={{ fontSize: 16, padding: '14px 40px' }}>
           {generating ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-          {generating ? 'Generiere...' : 'Generate'}
+          {generating ? 'Generiere...' : 'Generate Talking Head'}
         </button>
-        <div className="muted" style={{ fontSize: 11 }}>
-          {vidSettings.batch} × ({vidSettings.duration}s · {vidSettings.resolution} · {vidSettings.aspectRatio}) + {imgSettings.count} × Nano Banana Pro {imgSettings.resolution >= 4096 ? '4K' : imgSettings.resolution >= 2048 ? '2K' : '1K'}
-        </div>
         {progress && <div className="muted">{progress}</div>}
       </div>
 
-      {/* LAST RESULT preview */}
-      {lastResult && (
-        <div className="card">
-          <div className="card-title">Latest Run</div>
-          <div className="muted" style={{ marginBottom: 8 }}><strong>Topic:</strong> {lastResult.topic}</div>
-          <div className="muted" style={{ marginBottom: 8 }}><strong>Image-Prompt:</strong> {lastResult.imagePrompt}</div>
-          <div className="muted" style={{ marginBottom: 12 }}><strong>Video-Direction:</strong> {lastResult.videoDirection}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {lastResult.imageUrl && (
-              <div>
-                <img src={lastResult.imageUrl} alt="" style={{ width: '100%', borderRadius: 8 }} />
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <a href={lastResult.imageUrl} target="_blank" rel="noreferrer" download className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'center' }}>
-                    <Download size={12} /> Image
-                  </a>
-                </div>
-              </div>
-            )}
-            {lastResult.videoUrl && (
-              <div>
-                <video src={lastResult.videoUrl} controls style={{ width: '100%', borderRadius: 8 }} />
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <a href={lastResult.videoUrl} target="_blank" rel="noreferrer" download className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'center' }}>
-                    <Download size={12} /> Video
-                  </a>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* PREVIOUS RUNS */}
-      <Section title={`Previous runs (${data.videoCreation?.runs?.length || 0})`}>
-        {!data.videoCreation?.runs?.length && <div className="muted">Noch keine Runs</div>}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
-          {(data.videoCreation?.runs || []).map(r => (
-            <div key={r.id} style={{ background: 'var(--bg3)', borderRadius: 8, padding: 8, fontSize: 11 }}>
-              {r.imageUrl && <img src={r.imageUrl} alt="" style={{ width: '100%', borderRadius: 4, aspectRatio: '9/16', objectFit: 'cover' }} />}
-              <div style={{ marginTop: 6, fontWeight: 500 }}>{r.personaName}</div>
-              <div className="muted">{r.topic.slice(0, 50)}{r.topic.length > 50 ? '…' : ''}</div>
-              <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>{new Date(r.at).toLocaleString('de-DE')}</div>
-              {r.videoUrl && <a href={r.videoUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}><Video size={11} /> Video</a>}
-            </div>
-          ))}
-        </div>
-      </Section>
+      <ResultPreview result={lastResult} />
+      <PreviousRuns runs={data.videoCreation?.runs || []} />
 
       <style jsx>{`
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
+  )
+}
+
+/* ============================================================ TAB 2 — VIDEO GENERATION (Reel Recreate) ============================================================ */
+function VideoGenTab() {
+  const { data, update, toast } = useStore()
+  const fileInputRef = useRef(null)
+  const [scraping, setScraping] = useState(false)
+  const [scrapeMsg, setScrapeMsg] = useState('')
+  const [scrapeProgress, setScrapeProgress] = useState(null)
+  const [generating, setGenerating] = useState(false)
+  const [progress, setProgress] = useState('')
+  const [lastResult, setLastResult] = useState(null)
+
+  const vg = data.videoCreation?.videoGen || {}
+  const reels = vg.reels || []
+  const settings = vg.settings || { duration: 5, resolution: '720p', aspectRatio: '9:16', generateAudio: false, cameraFixed: false }
+
+  const projects = data.research?.projects || []
+  const activeProjectId = vg.activeProjectId || projects[0]?.id
+  const activeProject = projects.find(p => p.id === activeProjectId) || projects[0]
+  const projectAccounts = activeProject?.accounts || []
+
+  const wavespeedKey = data.serviceKeys?.wavespeed
+  const anthropicKey = data.serviceKeys?.anthropic
+  const geminiKey = data.serviceKeys?.gemini
+  const apifyKey = data.apifyKeys?.find(k => k.id === data.activeApifyKeyId)
+  const apifyToken = apifyKey?.token
+
+  function updateVG(patch) {
+    update(d => ({ ...d, videoCreation: { ...d.videoCreation, videoGen: { ...d.videoCreation.videoGen, ...patch } } }))
+  }
+  function updateSettings(patch) { updateVG({ settings: { ...settings, ...patch } }) }
+
+  function onFileChosen(file) {
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) return toast('Max 5MB für Reference-Bild', 'error')
+    const reader = new FileReader()
+    reader.onload = () => { updateVG({ refImage: reader.result }); toast('Reference-Bild gespeichert', 'success') }
+    reader.readAsDataURL(file)
+  }
+
+  async function runScrape() {
+    if (!apifyToken) return toast('Apify-Key fehlt (Settings)', 'error')
+    if (!projectAccounts.length) return toast('Projekt hat keine Accounts', 'error')
+    const expectedTotal = projectAccounts.length * 30
+    setScraping(true); setScrapeMsg(`Starte Apify-Run für "${activeProject.name}"...`)
+    setScrapeProgress({ itemsScraped: 0, total: expectedTotal, runtimeSecs: 0, etaSecs: null })
+    try {
+      const startRes = await fetch('/api/scrape', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: apifyToken, accounts: projectAccounts, type: 'reels', limit: 30 })
+      })
+      const startJson = await startRes.json()
+      if (!startRes.ok) throw new Error(startJson.error || 'Start fehlgeschlagen')
+      const { runId, datasetId } = startJson
+      const pollDeadline = Date.now() + 15 * 60 * 1000
+      let finalItems = null
+      while (Date.now() < pollDeadline) {
+        await new Promise(r => setTimeout(r, 5000))
+        const pollRes = await fetch('/api/scrape-status', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: apifyToken, runId, datasetId })
+        })
+        const pollJson = await pollRes.json()
+        if (pollJson.status === 'SUCCEEDED') { finalItems = pollJson.items || []; break }
+        if (pollJson.status && !['RUNNING', 'READY'].includes(pollJson.status)) {
+          throw new Error(pollJson.error || `Status: ${pollJson.status}`)
+        }
+        const secs = pollJson.runtimeSecs || 0
+        const items = pollJson.itemsScraped || 0
+        let etaSecs = null
+        if (items >= 5 && secs >= 5 && items < expectedTotal) {
+          etaSecs = Math.max(0, Math.round((expectedTotal - items) / (items / secs)))
+        }
+        setScrapeProgress({ itemsScraped: items, total: expectedTotal, runtimeSecs: secs, etaSecs })
+        setScrapeMsg('')
+      }
+      if (finalItems === null) throw new Error('Timeout (>15min)')
+      updateVG({ reels: finalItems, lastScrapedAt: new Date().toISOString() })
+      toast(`${finalItems.length} Reels gescrapt ✓`, 'success')
+    } catch (e) {
+      toast('Fehler: ' + e.message, 'error')
+    } finally {
+      setScraping(false); setScrapeMsg(''); setScrapeProgress(null)
+    }
+  }
+
+  const filteredReels = useMemo(() => {
+    return reels
+      .map(i => ({ ...i, _ratio: engagementRatio(i) }))
+      .sort((a, b) => vg.filter === 'viral'
+        ? (b.videoViewCount || b.likesCount || 0) - (a.videoViewCount || a.likesCount || 0)
+        : b._ratio - a._ratio)
+  }, [reels, vg.filter])
+
+  async function recreateReel(reel) {
+    if (!vg.refImage) return toast('Kein Reference-Bild — bitte erst hochladen', 'error')
+    if (!geminiKey) return toast('Gemini-Key fehlt (Settings)', 'error')
+    if (!anthropicKey) return toast('Anthropic-Key fehlt (Settings)', 'error')
+    if (!wavespeedKey) return toast('WaveSpeed-Key fehlt (Settings)', 'error')
+    const videoUrl = getReelVideoUrl(reel)
+    if (!videoUrl) return toast('Reel hat keine Video-URL — anderer Reel wählen', 'error')
+
+    setGenerating(true); setLastResult(null)
+    try {
+      setProgress('Gemini schaut sich das Reel an (~30s)...')
+      const aRes = await fetch('/api/gemini/analyze-video', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ geminiKey, videoUrl, prompt: vg.geminiPrompt })
+      })
+      const aJson = await aRes.json()
+      if (!aRes.ok) throw new Error(aJson.error || 'Analyse fehlgeschlagen')
+      const analysis = aJson.analysis
+
+      setProgress('Claude schreibt Seedance-Prompt...')
+      const cRes = await fetch('/api/anthropic/video-prompt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anthropicKey, analysis, metaPrompt: vg.claudeMetaPrompt })
+      })
+      const cJson = await cRes.json()
+      if (!cRes.ok) throw new Error(cJson.error || 'Prompt-Gen fehlgeschlagen')
+      const seedancePrompt = cJson.prompt
+
+      setProgress('Seedance 2.0 generiert Video (1-2 Min)...')
+      const vRes = await fetch('/api/wavespeed/video', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wavespeedKey,
+          imageUrl: vg.refImage,
+          prompt: seedancePrompt,
+          duration: settings.duration,
+          resolution: settings.resolution,
+          aspectRatio: settings.aspectRatio,
+          generateAudio: settings.generateAudio,
+          cameraFixed: settings.cameraFixed
+        })
+      })
+      const vStart = await vRes.json()
+      if (!vRes.ok) throw new Error(vStart.error || 'Video-Submit fehlgeschlagen')
+
+      let outVideoUrl = ''
+      const deadline = Date.now() + 5 * 60 * 1000
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 4000))
+        const pollRes = await fetch('/api/wavespeed/poll', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wavespeedKey, taskId: vStart.taskId })
+        })
+        const poll = await pollRes.json()
+        if (poll.status === 'completed' && poll.urls?.[0]) { outVideoUrl = poll.urls[0]; break }
+        if (poll.status === 'failed') throw new Error('Video-Gen fehlgeschlagen')
+        setProgress(`Seedance 2.0: ${poll.status || 'processing'}...`)
+      }
+      if (!outVideoUrl) throw new Error('Video-Gen Timeout')
+
+      const result = {
+        id: 'r' + Date.now(), at: new Date().toISOString(),
+        kind: 'videoGen',
+        sourceReelUrl: reel.url || `https://instagram.com/p/${reel.shortCode}`,
+        sourceAccount: reel.ownerUsername || reel.username,
+        analysis, prompt: seedancePrompt,
+        imageUrl: vg.refImage,
+        videoUrl: outVideoUrl,
+        settings: { ...settings }
+      }
+      update(d => ({ ...d, videoCreation: { ...d.videoCreation, runs: [result, ...(d.videoCreation.runs || [])].slice(0, 50) } }))
+      setLastResult(result)
+      toast('Recreate fertig ✓', 'success')
+    } catch (e) {
+      toast('Fehler: ' + e.message, 'error')
+    } finally {
+      setGenerating(false); setProgress('')
+    }
+  }
+
+  const needsSetup = !wavespeedKey || !anthropicKey || !geminiKey || !apifyToken
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {needsSetup && (
+        <div className="card" style={{ borderColor: 'var(--orange)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Setup unvollständig</div>
+          <div className="muted">
+            Brauchst <a href="/settings">Apify {!apifyToken ? '✗' : '✓'}</a> · WaveSpeed {!wavespeedKey ? '✗' : '✓'} · Anthropic {!anthropicKey ? '✗' : '✓'} · Gemini {!geminiKey ? '✗' : '✓'}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+        <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
+          <div className="card-title">REFERENCE BILD</div>
+          <div onClick={() => fileInputRef.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => { e.preventDefault(); onFileChosen(e.dataTransfer.files[0]) }}
+            style={{ border: '2px dashed var(--border)', borderRadius: 10, padding: 14, textAlign: 'center', cursor: 'pointer', background: 'var(--bg3)', marginBottom: 10 }}>
+            <Upload size={20} style={{ marginBottom: 4 }} />
+            <div style={{ fontSize: 12, fontWeight: 500 }}>Drag & drop oder klick</div>
+            <div className="muted" style={{ fontSize: 11 }}>JPG/PNG/WebP · max 5MB · wird bei jedem Recreate genutzt</div>
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={e => onFileChosen(e.target.files[0])} />
+          {vg.refImage && (
+            <div style={{ position: 'relative' }}>
+              <img src={vg.refImage} alt="" style={{ width: '100%', borderRadius: 8 }} />
+              <button className="btn-icon" onClick={() => updateVG({ refImage: '' })}
+                style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,0.6)', color: 'white' }}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+          )}
+          {!vg.refImage && <div className="muted" style={{ textAlign: 'center', padding: 20 }}>kein Reference-Bild</div>}
+        </div>
+
+        <div className="card" style={{ borderLeft: '3px solid #22c55e' }}>
+          <div className="card-title"><Video size={14} /> VIDEO SETTINGS (Seedance 2.0)</div>
+          <VideoSettings settings={settings} onChange={updateSettings} />
+        </div>
+      </div>
+
+      <div className="card" style={{ background: 'var(--bg2)' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, textTransform: 'uppercase' }}>Projekt</span>
+          <select className="inp inp-sm" style={{ minWidth: 180 }}
+            value={activeProjectId || ''}
+            onChange={e => updateVG({ activeProjectId: e.target.value })}>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.accounts.length})</option>)}
+          </select>
+          <span className="muted" style={{ fontSize: 12 }}>{projectAccounts.length} Account{projectAccounts.length === 1 ? '' : 's'}</span>
+          <a href="/content-research" style={{ fontSize: 11, color: 'var(--text2)', marginLeft: 'auto' }}>Projekte verwalten →</a>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={runScrape} disabled={scraping || !projectAccounts.length || !apifyToken}>
+            <RefreshCw size={14} className={scraping ? 'spin' : ''} />
+            {scraping ? 'Scraping...' : 'Reels scrapen'}
+          </button>
+          {reels.length > 0 && (
+            <>
+              <span className="muted">{reels.length} Reels geladen</span>
+              {vg.lastScrapedAt && <span className="muted" style={{ fontSize: 11 }}>· {new Date(vg.lastScrapedAt).toLocaleString('de-DE')}</span>}
+            </>
+          )}
+        </div>
+        {scrapeMsg && <div className="muted" style={{ marginTop: 10 }}>{scrapeMsg}</div>}
+        {scrapeProgress && (() => {
+          const { itemsScraped, total, runtimeSecs, etaSecs } = scrapeProgress
+          const pct = total > 0 ? Math.min(100, Math.round((itemsScraped / total) * 100)) : 0
+          return (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12 }}>
+                <span style={{ color: 'var(--text2)' }}>{itemsScraped} / {total} Reels</span>
+                <span style={{ display: 'flex', gap: 14, color: 'var(--text2)' }}>
+                  <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{pct}%</span>
+                  <span>⏱ {fmtTime(runtimeSecs)}</span>
+                  <span>ETA: {etaSecs != null ? fmtTime(etaSecs) : '...'}</span>
+                </span>
+              </div>
+              <div style={{ height: 8, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: pct + '%', background: 'var(--accent)', transition: 'width 0.4s' }} />
+              </div>
+            </div>
+          )
+        })()}
+      </div>
+
+      {reels.length > 0 && (
+        <>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Filter size={14} color="var(--text2)" />
+            <button className={vg.filter === 'viral' ? 'btn btn-sm' : 'btn btn-ghost btn-sm'}
+              onClick={() => updateVG({ filter: 'viral' })}>Most Viral</button>
+            <button className={vg.filter === 'converting' ? 'btn btn-sm' : 'btn btn-ghost btn-sm'}
+              onClick={() => updateVG({ filter: 'converting' })}>Highest Converting</button>
+            <span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{filteredReels.length} Reels</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+            {filteredReels.map((reel, i) => {
+              const id = reel.id || reel.shortCode || reel.url || i
+              const thumb = getReelMedia(reel)
+              const v = reel.videoViewCount || reel.videoPlayCount || 0
+              const l = reel.likesCount || 0
+              const hasVideo = !!getReelVideoUrl(reel)
+              return (
+                <div key={id} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                  {thumb && (
+                    <div style={{ position: 'relative', width: '100%', aspectRatio: '9/16', background: 'var(--bg3)' }}>
+                      <img src={proxy(thumb)} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
+                      <div style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(0,0,0,0.6)', color: 'white', fontSize: 10, padding: '2px 6px', borderRadius: 4 }}>
+                        {reel._ratio?.toFixed(1)}%
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ padding: 10 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>@{reel.ownerUsername || reel.username}</div>
+                    <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 8, color: 'var(--text2)' }}>
+                      <span>👁 {fmt(v)}</span><span>♥ {fmt(l)}</span>
+                    </div>
+                    <button className="btn btn-sm" disabled={generating || !hasVideo || !vg.refImage}
+                      onClick={() => recreateReel(reel)}
+                      style={{ marginTop: 8, width: '100%', justifyContent: 'center' }}
+                      title={!hasVideo ? 'Reel hat keine Video-URL' : !vg.refImage ? 'Reference-Bild fehlt' : ''}>
+                      <Sparkles size={12} /> Recreate
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      <Section title="🤖 Gemini-Prompt (wie soll das Video analysiert werden?)" icon={Eye}>
+        <textarea className="inp" rows="5" value={vg.geminiPrompt}
+          onChange={e => updateVG({ geminiPrompt: e.target.value })} />
+      </Section>
+
+      <Section title="✍️ Claude-Prompt (wie soll der Seedance-Prompt geschrieben werden?)" icon={Wand2}>
+        <textarea className="inp" rows="5" value={vg.claudeMetaPrompt}
+          onChange={e => updateVG({ claudeMetaPrompt: e.target.value })} />
+      </Section>
+
+      {generating && (
+        <div className="card" style={{ borderColor: 'var(--accent)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <RefreshCw size={16} className="spin" style={{ color: 'var(--accent)' }} />
+            <span>{progress}</span>
+          </div>
+        </div>
+      )}
+
+      <ResultPreview result={lastResult} />
+      <PreviousRuns runs={data.videoCreation?.runs || []} />
+
+      <style jsx>{`
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
+    </div>
+  )
+}
+
+/* ============================================================ SHARED ============================================================ */
+function ResultPreview({ result }) {
+  if (!result) return null
+  return (
+    <div className="card">
+      <div className="card-title">Latest Run</div>
+      {result.topic && <div className="muted" style={{ marginBottom: 8 }}><strong>Topic:</strong> {result.topic}</div>}
+      {result.sourceReelUrl && <div className="muted" style={{ marginBottom: 8 }}><strong>Source:</strong> <a href={result.sourceReelUrl} target="_blank" rel="noreferrer">@{result.sourceAccount}</a></div>}
+      {result.prompt && <div className="muted" style={{ marginBottom: 8 }}><strong>Seedance-Prompt:</strong> {result.prompt}</div>}
+      {result.imagePrompt && <div className="muted" style={{ marginBottom: 8 }}><strong>Image-Prompt:</strong> {result.imagePrompt}</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        {result.imageUrl && (
+          <div>
+            <img src={result.imageUrl} alt="" style={{ width: '100%', borderRadius: 8 }} />
+            <a href={result.imageUrl} target="_blank" rel="noreferrer" download className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}>
+              <Download size={12} /> Image
+            </a>
+          </div>
+        )}
+        {result.videoUrl && (
+          <div>
+            <video src={result.videoUrl} controls style={{ width: '100%', borderRadius: 8 }} />
+            <a href={result.videoUrl} target="_blank" rel="noreferrer" download className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}>
+              <Download size={12} /> Video
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PreviousRuns({ runs }) {
+  return (
+    <Section title={`Previous runs (${runs.length})`}>
+      {!runs.length && <div className="muted">Noch keine Runs</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+        {runs.map(r => (
+          <div key={r.id} style={{ background: 'var(--bg3)', borderRadius: 8, padding: 8, fontSize: 11 }}>
+            {r.imageUrl && <img src={r.imageUrl} alt="" style={{ width: '100%', borderRadius: 4, aspectRatio: '9/16', objectFit: 'cover' }} />}
+            <div style={{ marginTop: 6, fontWeight: 500 }}>
+              {r.kind === 'videoGen' ? '🎬 Recreate' : '🗣 Talking Head'}
+              {r.personaName && ` · ${r.personaName}`}
+            </div>
+            <div className="muted">{(r.topic || r.prompt || '').slice(0, 50)}</div>
+            <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>{new Date(r.at).toLocaleString('de-DE')}</div>
+            {r.videoUrl && <a href={r.videoUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm" style={{ marginTop: 6, width: '100%', justifyContent: 'center' }}><Video size={11} /> Video</a>}
+          </div>
+        ))}
+      </div>
+    </Section>
   )
 }

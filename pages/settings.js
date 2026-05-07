@@ -4,11 +4,12 @@ import { useStore } from '../lib/store'
 import { exportBackup, importBackup, DEFAULT_DATA } from '../lib/storage'
 
 const SERVICES = [
+  { id: 'wavespeed', label: 'WaveSpeed (Nano Banana Pro + Seedance 2.0)', placeholder: 'ws_...', helpUrl: 'https://wavespeed.ai' },
+  { id: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...', helpUrl: 'https://console.anthropic.com' },
+  { id: 'gemini', label: 'Google Gemini (Video-Analyse)', placeholder: 'AIza...', helpUrl: 'https://aistudio.google.com/apikey' },
   { id: 'higgsfield', label: 'Higgsfield Soul 2', placeholder: 'hf_...', helpUrl: 'https://higgsfield.ai' },
-  { id: 'wavespeed', label: 'WaveSpeed (Wan 2.7 Pro)', placeholder: '...', helpUrl: 'https://wavespeed.ai' },
   { id: 'seedance', label: 'Seedance / ByteDance Video', placeholder: '...', helpUrl: 'https://replicate.com/bytedance/seedance-1-pro' },
   { id: 'falai', label: 'fal.ai', placeholder: 'fal_...', helpUrl: 'https://fal.ai' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...', helpUrl: 'https://console.anthropic.com' },
   { id: 'openai', label: 'OpenAI', placeholder: 'sk-...', helpUrl: 'https://platform.openai.com/api-keys' }
 ]
 
