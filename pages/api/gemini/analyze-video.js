@@ -35,11 +35,24 @@ export default async function handler(req, res) {
   if (!prompt) return res.status(400).json({ error: 'Analyse-Prompt fehlt' })
 
   try {
-    const vRes = await fetch(videoUrl)
+    // Fetch with timeout (30s) — Instagram CDN can be slow
+    const ctrl = new AbortController()
+    const fetchTimeout = setTimeout(() => ctrl.abort(), 30000)
+    let vRes
+    try {
+      vRes = await fetch(videoUrl, { signal: ctrl.signal })
+    } catch (e) {
+      clearTimeout(fetchTimeout)
+      return res.status(500).json({ error: `Video-Download Timeout/Fehler: ${e.message}` })
+    }
+    clearTimeout(fetchTimeout)
     if (!vRes.ok) return res.status(500).json({ error: `Video-Fetch ${vRes.status}` })
     const buf = Buffer.from(await vRes.arrayBuffer())
     const sizeMB = buf.length / 1024 / 1024
-    if (sizeMB > 20) return res.status(400).json({ error: `Video zu groß (${sizeMB.toFixed(1)}MB) — max 20MB für Inline` })
+    // Hard cap at 12MB raw — base64-encoded becomes ~16MB, leaves room for Gemini's 20MB inline limit
+    if (sizeMB > 12) return res.status(400).json({
+      error: `Reel zu groß (${sizeMB.toFixed(1)}MB). Gemini akzeptiert max 12MB inline. Wähle ein kürzeres Reel oder eines mit weniger Daten.`
+    })
 
     const base64 = buf.toString('base64')
     const mimeType = vRes.headers.get('content-type')?.split(';')[0] || 'video/mp4'

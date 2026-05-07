@@ -516,7 +516,11 @@ function VideoGenTab() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ geminiKey, videoUrl, prompt: vg.geminiPrompt })
       })
-      const aJson = await aRes.json()
+      // Handle non-JSON error responses (e.g. Vercel timeout returns plain text)
+      const aText = await aRes.text()
+      let aJson
+      try { aJson = JSON.parse(aText) }
+      catch { throw new Error(`Gemini-Endpoint Fehler (${aRes.status}): ${aText.slice(0, 200)}`) }
       if (!aRes.ok) throw new Error(aJson.error || 'Analyse fehlgeschlagen')
       const analysis = aJson.analysis
 
