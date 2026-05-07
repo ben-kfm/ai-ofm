@@ -1,12 +1,31 @@
-// Google Gemini 2.0 Flash — Video analysis for reel recreation
-// Pipeline: download video → upload to Gemini Files API → analyze with prompt → return text
+// Google Gemini — Video analysis for reel recreation
+// Tries newest model first; falls back to older models on 429 (quota) since each model has its own quota pool.
 //
 // POST { geminiKey, videoUrl, prompt }
-// Returns: { ok, analysis }
+// Returns: { ok, analysis, modelUsed }
 
 export const config = { maxDuration: 60 }
 
-const MODEL = 'gemini-2.0-flash'
+// Order: best/newest first. Each model has separate free-tier quotas.
+const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+
+async function callGemini(model, key, mimeType, base64, prompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mimeType, data: base64 } },
+          { text: prompt }
+        ]
+      }],
+      generationConfig: { temperature: 0.4, maxOutputTokens: 1500 }
+    })
+  })
+  return r
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -16,44 +35,32 @@ export default async function handler(req, res) {
   if (!prompt) return res.status(400).json({ error: 'Analyse-Prompt fehlt' })
 
   try {
-    // 1. Fetch video bytes
     const vRes = await fetch(videoUrl)
     if (!vRes.ok) return res.status(500).json({ error: `Video-Fetch ${vRes.status}` })
     const buf = Buffer.from(await vRes.arrayBuffer())
     const sizeMB = buf.length / 1024 / 1024
     if (sizeMB > 20) return res.status(400).json({ error: `Video zu groß (${sizeMB.toFixed(1)}MB) — max 20MB für Inline` })
 
-    // 2. Use inline data path (videos < 20MB can be sent directly without Files API)
     const base64 = buf.toString('base64')
     const mimeType = vRes.headers.get('content-type')?.split(';')[0] || 'video/mp4'
 
-    // 3. Generate content
-    const genUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(geminiKey)}`
-    const genRes = await fetch(genUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { inline_data: { mime_type: mimeType, data: base64 } },
-            { text: prompt }
-          ]
-        }],
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 1500
-        }
-      })
-    })
-    if (!genRes.ok) {
-      const t = await genRes.text()
-      return res.status(genRes.status).json({ error: `Gemini ${genRes.status}: ${t.slice(0, 400)}` })
+    let lastErr = null
+    for (const model of MODELS) {
+      const r = await callGemini(model, geminiKey, mimeType, base64, prompt)
+      if (r.ok) {
+        const j = await r.json()
+        const analysis = j.candidates?.[0]?.content?.parts?.[0]?.text || ''
+        if (!analysis) { lastErr = `${model} kein Text geliefert`; continue }
+        return res.status(200).json({ ok: true, analysis, modelUsed: model, sizeMB: sizeMB.toFixed(1) })
+      }
+      const errText = await r.text()
+      lastErr = `${model}: ${r.status} ${errText.slice(0, 200)}`
+      // 429 = quota exceeded → try next model. 404 = model name wrong → try next. Other errors → stop.
+      if (r.status !== 429 && r.status !== 404) break
     }
-    const j = await genRes.json()
-    const analysis = j.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    if (!analysis) return res.status(500).json({ error: 'Gemini lieferte keinen Text: ' + JSON.stringify(j).slice(0, 300) })
-
-    return res.status(200).json({ ok: true, analysis, sizeMB: sizeMB.toFixed(1) })
+    return res.status(429).json({
+      error: `Alle Gemini-Modelle haben Quota erschöpft oder Fehler. Free-Tier ist begrenzt — entweder 1 Minute warten oder Billing aktivieren auf https://aistudio.google.com/app/billing\n\nLast error: ${lastErr}`
+    })
   } catch (e) {
     return res.status(500).json({ error: 'Analyse-Fehler: ' + (e.message || String(e)) })
   }
