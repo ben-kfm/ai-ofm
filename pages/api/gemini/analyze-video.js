@@ -6,7 +6,7 @@
 
 export const config = { maxDuration: 60 }
 
-const MODEL = 'gemini-2.0-flash-exp'
+const MODEL = 'gemini-2.0-flash'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
