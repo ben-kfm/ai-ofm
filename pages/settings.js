@@ -1,24 +1,87 @@
-import { useState } from 'react'
-import { Plus, Trash2, Download, Upload, Key, Shield, Database, Info } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Plus, Trash2, Download, Upload, Key, Database, Info, UserPlus, Shield, Mail } from 'lucide-react'
 import { useStore } from '../lib/store'
+import { useAuth } from '../lib/auth'
 import { exportBackup, importBackup, DEFAULT_DATA } from '../lib/storage'
-
-const SERVICES = [
-  { id: 'wavespeed', label: 'WaveSpeed (Nano Banana Pro + Seedance 2.0)', placeholder: 'ws_...', helpUrl: 'https://wavespeed.ai' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', placeholder: 'sk-ant-...', helpUrl: 'https://console.anthropic.com' },
-  { id: 'gemini', label: 'Google Gemini (Video-Analyse)', placeholder: 'AIza...', helpUrl: 'https://aistudio.google.com/apikey' },
-  { id: 'higgsfield', label: 'Higgsfield Soul 2', placeholder: 'hf_...', helpUrl: 'https://higgsfield.ai' },
-  { id: 'seedance', label: 'Seedance / ByteDance Video', placeholder: '...', helpUrl: 'https://replicate.com/bytedance/seedance-1-pro' },
-  { id: 'falai', label: 'fal.ai', placeholder: 'fal_...', helpUrl: 'https://fal.ai' },
-  { id: 'openai', label: 'OpenAI', placeholder: 'sk-...', helpUrl: 'https://platform.openai.com/api-keys' }
-]
+import { getSupabase, supabaseEnabled } from '../lib/supabase'
 
 function maskKey(k) { if (!k) return ''; if (k.length < 12) return '••••'; return k.slice(0, 8) + '…' + k.slice(-4) }
 
 export default function Settings() {
   const { data, update, setData, toast, loaded } = useStore()
+  const { user, isAdmin } = useAuth()
   const [newKeyLabel, setNewKeyLabel] = useState('')
   const [newKeyToken, setNewKeyToken] = useState('')
+
+  // Invite state
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviting, setInviting] = useState(false)
+  const [allowed, setAllowed] = useState([])
+  const [allowedLoading, setAllowedLoading] = useState(false)
+
+  useEffect(() => {
+    if (!isAdmin || !supabaseEnabled) return
+    loadAllowed()
+  }, [isAdmin])
+
+  async function loadAllowed() {
+    setAllowedLoading(true)
+    try {
+      const sb = getSupabase()
+      const { data, error } = await sb.from('allowed_users').select('email, is_admin, invited_at, invited_by').order('invited_at', { ascending: false })
+      if (error) throw error
+      setAllowed(data || [])
+    } catch (e) {
+      toast('Liste laden fehlgeschlagen: ' + e.message, 'error')
+    } finally {
+      setAllowedLoading(false)
+    }
+  }
+
+  async function sendInvite() {
+    const email = inviteEmail.trim().toLowerCase()
+    if (!email || !email.includes('@')) return toast('Gültige E-Mail eintragen', 'error')
+    if (allowed.some(a => a.email === email)) return toast('Schon eingeladen', 'error')
+    setInviting(true)
+    try {
+      const sb = getSupabase()
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('/api/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ email })
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Fehler')
+      toast(`${email} eingeladen ✓ Magic-Link wurde verschickt.`, 'success')
+      setInviteEmail('')
+      loadAllowed()
+    } catch (e) {
+      toast('Invite fehlgeschlagen: ' + e.message, 'error')
+    } finally {
+      setInviting(false)
+    }
+  }
+
+  async function revokeAccess(email) {
+    if (email === user.email) return toast('Du kannst dich nicht selbst entfernen', 'error')
+    if (!confirm(`Zugriff für ${email} entfernen?`)) return
+    try {
+      const sb = getSupabase()
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('/api/invite', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ email })
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Fehler')
+      toast(`${email} entfernt`, 'success')
+      loadAllowed()
+    } catch (e) {
+      toast('Entfernen fehlgeschlagen: ' + e.message, 'error')
+    }
+  }
 
   function addApifyKey() {
     const label = newKeyLabel.trim()
@@ -34,6 +97,7 @@ export default function Settings() {
     setNewKeyLabel(''); setNewKeyToken('')
     toast(`Key "${label}" hinzugefügt`, 'success')
   }
+
   function deleteApifyKey(id) {
     if (!confirm('Diesen Key wirklich löschen?')) return
     const remaining = data.apifyKeys.filter(k => k.id !== id)
@@ -42,14 +106,79 @@ export default function Settings() {
       activeApifyKeyId: data.activeApifyKeyId === id ? (remaining[0]?.id || null) : data.activeApifyKeyId
     })
   }
-  function setServiceKey(id, value) {
-    update({ serviceKeys: { ...data.serviceKeys, [id]: value } })
-  }
 
   if (!loaded) return null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 760 }}>
+
+      {/* INVITES (Admin only) */}
+      {isAdmin && supabaseEnabled && (
+        <div className="card">
+          <div className="card-title"><UserPlus size={16} /> Team-Zugriff</div>
+          <div className="muted" style={{ marginBottom: 14 }}>
+            Lade Leute per E-Mail ein. Sie bekommen einen Magic-Link und können sich danach selbst einloggen.
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            <div style={{ position: 'relative', flex: '1 1 220px' }}>
+              <Mail size={14} style={{ position: 'absolute', left: 12, top: 10, color: 'var(--text3)' }} />
+              <input
+                className="inp inp-sm" style={{ paddingLeft: 34 }}
+                type="email"
+                placeholder="mail@example.com"
+                value={inviteEmail}
+                onChange={e => setInviteEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendInvite()}
+              />
+            </div>
+            <button className="btn btn-sm" onClick={sendInvite} disabled={inviting}>
+              <UserPlus size={12} /> {inviting ? 'Sende…' : 'Einladen'}
+            </button>
+          </div>
+
+          {allowedLoading ? (
+            <div className="muted">Lade Mitglieder…</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {allowed.map(a => (
+                <div key={a.email} style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 14px',
+                  background: 'var(--bg3)', borderRadius: 10,
+                  border: '1px solid var(--border-soft)'
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>
+                      {a.email}
+                      {a.is_admin && <span style={{ color: 'var(--accent3)', fontSize: 10, marginLeft: 8, textTransform: 'uppercase', letterSpacing: 0.08, fontWeight: 700 }}>● Admin</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+                      Eingeladen am {a.invited_at ? new Date(a.invited_at).toLocaleDateString('de-DE') : '?'}
+                      {a.invited_by ? ` von ${a.invited_by}` : ''}
+                    </div>
+                  </div>
+                  {!a.is_admin && (
+                    <button className="btn-icon" onClick={() => revokeAccess(a.email)} title="Zugriff entziehen">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!allowed.length && <div className="muted">Noch niemand eingeladen.</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!supabaseEnabled && (
+        <div className="card" style={{ borderColor: 'var(--orange)' }}>
+          <div className="card-title" style={{ color: 'var(--orange)' }}><Shield size={16} /> Auth nicht konfiguriert</div>
+          <div className="muted">
+            Setze in Vercel die ENV-Variablen <code>NEXT_PUBLIC_SUPABASE_URL</code>, <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> und <code>SUPABASE_SERVICE_ROLE_KEY</code>. Solange das fehlt, läuft die App im lokalen Single-User-Modus weiter.
+          </div>
+        </div>
+      )}
 
       {/* APIFY MULTI-KEY */}
       <div className="card">
@@ -82,7 +211,7 @@ export default function Settings() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>
                   {k.label}
-                  {isActive && <span style={{ color: 'var(--accent)', fontSize: 11, marginLeft: 8 }}>● aktiv</span>}
+                  {isActive && <span style={{ color: 'var(--accent3)', fontSize: 11, marginLeft: 8 }}>● aktiv</span>}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace', marginTop: 2 }}>
                   {maskKey(k.token)}
@@ -117,34 +246,13 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* OTHER SERVICE KEYS */}
-      <div className="card">
-        <div className="card-title"><Shield size={16} /> Service API Keys</div>
-        <div className="muted" style={{ marginBottom: 14 }}>
-          Für die Automations Video Creation (Seedance/Kling) und Carousels (Higgsfield/WaveSpeed). Werden lokal im Browser gespeichert.
-        </div>
-        {SERVICES.map(s => (
-          <div key={s.id} style={{ marginBottom: 12 }}>
-            <label className="label">
-              {s.label}
-              {' '}<a href={s.helpUrl} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>↗</a>
-            </label>
-            <input
-              type="password"
-              className="inp"
-              value={data.serviceKeys[s.id] || ''}
-              onChange={e => setServiceKey(s.id, e.target.value)}
-              placeholder={s.placeholder}
-            />
-          </div>
-        ))}
-      </div>
-
       {/* DATA */}
       <div className="card">
         <div className="card-title"><Database size={16} /> Daten</div>
         <div className="muted" style={{ marginBottom: 12 }}>
-          Alle Daten (Keys, Accounts, Kanban, Sessions) liegen in deinem Browser. Backup machen wenn du auf einen anderen Browser/PC wechseln willst.
+          {supabaseEnabled
+            ? 'Daten liegen in der Cloud (Supabase) und werden zwischen allen eingeloggten Usern geteilt. Backup ist optional.'
+            : 'Daten liegen in deinem Browser. Backup machen wenn du auf einen anderen Browser/PC wechseln willst.'}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button className="btn btn-ghost btn-sm" onClick={() => exportBackup(data)}>
@@ -181,7 +289,7 @@ export default function Settings() {
 
       {/* APP INFO */}
       <div className="muted" style={{ textAlign: 'center', padding: '20px 0' }}>
-        AI OFM v0.1 • Built for BOSS
+        AI OFM • {user?.email || ''}
       </div>
     </div>
   )
