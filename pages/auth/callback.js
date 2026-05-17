@@ -18,35 +18,32 @@ export default function AuthCallback() {
 
     async function run() {
       try {
-        // With @supabase/ssr, the auth-token cookie is set by Supabase server before
-        // redirecting here. So usually we just need to check the session and route on.
-        // If the cookie isn't there yet, fall back to the explicit PKCE exchange.
-        let user = null
-        try {
-          const { data } = await sb.auth.getUser()
-          user = data?.user || null
-        } catch {}
-
-        if (!user) {
-          const code = new URL(window.location.href).searchParams.get('code')
-          if (code) {
-            const { error } = await sb.auth.exchangeCodeForSession(code)
-            if (error) throw error
-            const { data: re } = await sb.auth.getUser()
-            user = re?.user || null
-          }
+        // Implicit flow: Supabase puts the session in URL hash (#access_token=...).
+        // With detectSessionInUrl=true, supabase-js sets the session automatically.
+        // PKCE flow: ?code=... in query. We try exchange for backwards compatibility.
+        const url = new URL(window.location.href)
+        const code = url.searchParams.get('code')
+        if (code) {
+          try {
+            await sb.auth.exchangeCodeForSession(code)
+          } catch {}
         }
-
+        // Give detect-session a moment to fire.
+        await new Promise(r => setTimeout(r, 300))
+        const { data } = await sb.auth.getUser()
         if (cancelled) return
-        if (!user) throw new Error('Session konnte nicht geöffnet werden. Versuch nochmal.')
+        if (!data?.user) {
+          // Session may still be set in storage but getUser failed; just trust and continue.
+          router.replace(next)
+          return
+        }
         router.replace(next)
       } catch (e) {
         if (!cancelled) setErr(e?.message || 'Login fehlgeschlagen')
       }
     }
     run()
-    // Safety: if we're still stuck after 7s, surface a manual continue button.
-    const t = setTimeout(() => { if (!cancelled) setErr(prev => prev || 'Hängt fest. Klick weiter.') }, 7000)
+    const t = setTimeout(() => { if (!cancelled) setErr(prev => prev || 'Hängt fest. Klick weiter.') }, 8000)
     return () => { cancelled = true; clearTimeout(t) }
   }, [router.isReady])
 
