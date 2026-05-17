@@ -1,24 +1,14 @@
 import { useRouter } from 'next/router'
 import Link from 'next/link'
-import {
-  LayoutDashboard, Search, Video, Layers, Settings,
-  Sun, Moon, Sparkles
-} from 'lucide-react'
+import { Search, Settings, Sun, Moon, Sparkles, LogOut } from 'lucide-react'
 import { useStore } from '../lib/store'
+import { useAuth } from '../lib/auth'
 
 const NAV = [
   {
-    section: 'Übersicht',
+    section: 'Workspace',
     items: [
-      { href: '/', label: 'Dashboard', icon: LayoutDashboard }
-    ]
-  },
-  {
-    section: 'Automations',
-    items: [
-      { href: '/content-research', label: 'Content Research', icon: Search, badge: 'live' },
-      { href: '/video-creation', label: 'Video Creation', icon: Video, badge: 'soon' },
-      { href: '/carousels', label: 'Carousels', icon: Layers, badge: 'soon' }
+      { href: '/content-research', label: 'Content Research', icon: Search, badge: 'live' }
     ]
   },
   {
@@ -30,19 +20,28 @@ const NAV = [
 ]
 
 const PAGE_TITLES = {
-  '/': 'Dashboard',
+  '/': 'Content Research',
   '/content-research': 'Content Research',
-  '/video-creation': 'Video Creation',
-  '/carousels': 'Carousels',
   '/settings': 'Settings'
 }
 
 export default function Layout({ children }) {
   const router = useRouter()
   const { data, update, toasts } = useStore()
+  const { user, isAdmin, signOut, loading } = useAuth()
 
   const toggleTheme = () => update({ theme: data.theme === 'dark' ? 'light' : 'dark' })
   const activeKey = data.apifyKeys.find(k => k.id === data.activeApifyKeyId)
+  const initials = (user?.email || '?').slice(0, 2).toUpperCase()
+
+  // While auth resolves, show a skinny placeholder so we never flash unauthed content.
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text3)', fontSize: 13 }}>
+        Lade…
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -51,7 +50,7 @@ export default function Layout({ children }) {
           <div className="sidebar-logo-icon"><Sparkles size={18} /></div>
           <div className="sidebar-logo-text">
             AI OFM
-            <span>Automation Suite</span>
+            <span>Content Research</span>
           </div>
         </div>
 
@@ -60,7 +59,7 @@ export default function Layout({ children }) {
             <div className="nav-section">{group.section}</div>
             {group.items.map(it => {
               const Icon = it.icon
-              const isActive = router.pathname === it.href
+              const isActive = router.pathname === it.href || (it.href === '/content-research' && router.pathname === '/')
               return (
                 <Link key={it.href} href={it.href} className={`nav-item ${isActive ? 'active' : ''}`}>
                   <Icon size={16} />
@@ -73,10 +72,25 @@ export default function Layout({ children }) {
         ))}
 
         <div className="sidebar-bottom">
+          {user && (
+            <div className="sidebar-user" title={user.email}>
+              <div className="sidebar-user-avatar">{initials}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="sidebar-user-mail">{user.email}</div>
+                <div className="sidebar-user-role">{isAdmin ? 'Admin' : 'Member'}</div>
+              </div>
+            </div>
+          )}
           <div className="nav-item" onClick={toggleTheme} role="button">
             {data.theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
             <span>{data.theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
           </div>
+          {user && (
+            <div className="nav-item" onClick={signOut} role="button">
+              <LogOut size={16} />
+              <span>Logout</span>
+            </div>
+          )}
         </div>
       </aside>
 
